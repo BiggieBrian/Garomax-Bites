@@ -3,7 +3,8 @@ import { AuthProvider, useAuth } from './context/AuthContext';
 import { Login } from './pages/Login';
 import { WaiterPOS } from './pages/WaiterPOS';
 import { KitchenDisplay } from './pages/KitchenDisplay';
-import { LogOut, UserCheck,} from 'lucide-react';
+import { AdminDashboard } from './pages/AdminDashboard';
+import { LogOut } from 'lucide-react';
 
 const DashboardSwitch: React.FC = () => {
   const { currentUser, logout } = useAuth();
@@ -54,18 +55,7 @@ const DashboardSwitch: React.FC = () => {
 
         {currentUser.role === 'cook' && <KitchenDisplay/>}
 
-        {currentUser.role === 'admin' && (
-          <div className="relative p-8 bg-[#0f1117] border border-zinc-800/80 rounded-3xl text-center shadow-2xl">
-            {/* PayRoller Corner Accents */}
-            <div className="absolute top-2 left-2 w-2 h-2 border-t-2 border-l-2 border-orange-500/40" />
-            <div className="absolute top-2 right-2 w-2 h-2 border-t-2 border-r-2 border-orange-500/40" />
-            <div className="absolute bottom-2 left-2 w-2 h-2 border-b-2 border-l-2 border-orange-500/40" />
-            <div className="absolute bottom-2 right-2 w-2 h-2 border-b-2 border-r-2 border-orange-500/40" />
-
-            <h2 className="text-lg font-bold text-white tracking-wide">OWNER AUDIT PANEL</h2>
-            <p className="text-zinc-500 text-xs mt-2 font-mono">STAFF LEDGER & PAYROLL TRACKER</p>
-          </div>
-        )}
+        {currentUser.role === 'admin' && <AdminDashboard />}
       </main>
     </div>
   );

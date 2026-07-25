@@ -3,7 +3,7 @@ import { useLiveQuery } from 'dexie-react-hooks';
 import { db } from '../db/kibandaDB';
 import { useAuth } from '../context/AuthContext';
 import type { OrderItem, PaymentMethod } from '../types';
-import { Plus, Minus, Send, Clock, CheckCircle, ShoppingBag, CreditCard, DollarSign } from 'lucide-react';
+import { Plus, Minus, Send, Clock, CheckCircle, ShoppingBag } from 'lucide-react';
 
 export const WaiterPOS: React.FC = () => {
   const { currentUser } = useAuth();
