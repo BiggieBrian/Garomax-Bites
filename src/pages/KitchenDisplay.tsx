@@ -1,10 +1,16 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db } from '../db/kibandaDB';
 import { requestSync } from '../db/sync';
 import { useAuth } from '../context/AuthContext';
-import { Check, Flame, Package } from 'lucide-react';
-import type { OrderItem } from '../types';
+import { Check, Flame, Package, AlertTriangle, X } from 'lucide-react';
+import type { OrderItem, WasteReason } from '../types';
+
+const WASTE_REASONS: { value: WasteReason; label: string; target: 'dish' | 'ingredient' }[] = [
+  { value: 'burnt_overcooked', label: 'Burnt / Overcooked', target: 'dish' },
+  { value: 'spilled_dropped', label: 'Spilled / Dropped', target: 'dish' },
+  { value: 'spoiled_raw', label: 'Spoiled Raw Stock', target: 'ingredient' },
+];
 
 export const KitchenDisplay: React.FC = () => {
   const { currentUser } = useAuth();
@@ -18,6 +24,102 @@ export const KitchenDisplay: React.FC = () => {
 
   const ingredients = useLiveQuery(() => db.ingredients.toArray(), []);
   const recipes = useLiveQuery(() => db.recipes.toArray(), []);
+
+  const dishes = Array.from(new Map((recipes ?? []).map((r) => [r.dish_name, r])).values());
+
+  // ---------------------------------------------------------------------
+  // Waste / spoilage logging — burnt or dropped plates and spoiled raw
+  // stock. Optionally deducts the cost straight into the cook's payroll
+  // ledger so the admin isn't typing shortages in by hand.
+  // ---------------------------------------------------------------------
+  const [showWasteForm, setShowWasteForm] = useState(false);
+  const [wasteReason, setWasteReason] = useState<WasteReason>('burnt_overcooked');
+  const [wasteTargetId, setWasteTargetId] = useState(''); // dish_name or ingredient_id
+  const [wasteQty, setWasteQty] = useState('');
+  const [deductFromPay, setDeductFromPay] = useState(false);
+  const [wasteError, setWasteError] = useState('');
+
+  const wasteTargetKind = WASTE_REASONS.find((r) => r.value === wasteReason)?.target ?? 'dish';
+
+  const resetWasteForm = () => {
+    setWasteReason('burnt_overcooked');
+    setWasteTargetId('');
+    setWasteQty('');
+    setDeductFromPay(false);
+    setWasteError('');
+  };
+
+  // Estimate the cost of one plate of a dish from its recipe's ingredient costs.
+  const dishUnitCost = (dishName: string) =>
+    (recipes ?? [])
+      .filter((r) => r.dish_name === dishName)
+      .reduce((sum, r) => {
+        const ing = ingredients?.find((i) => i.ingredient_id === r.ingredient_id);
+        return sum + r.quantity_per_plate * (ing?.last_purchase_cost ?? 0);
+      }, 0);
+
+  const handleLogWaste = async () => {
+    setWasteError('');
+    if (!currentUser) return;
+    const qty = parseFloat(wasteQty);
+    if (!wasteTargetId) {
+      setWasteError(wasteTargetKind === 'dish' ? 'Select a dish.' : 'Select an ingredient.');
+      return;
+    }
+    if (!qty || qty <= 0) {
+      setWasteError('Enter a quantity greater than 0.');
+      return;
+    }
+
+    let name: string;
+    let cost: number;
+
+    if (wasteTargetKind === 'ingredient') {
+      const ing = ingredients?.find((i) => i.ingredient_id === wasteTargetId);
+      if (!ing) return;
+      name = ing.name;
+      cost = qty * ing.last_purchase_cost;
+      // Raw stock spoiled before use — take it out of the shelf count now.
+      await db.ingredients.update(ing.ingredient_id, {
+        quantity_on_hand: Math.max(0, ing.quantity_on_hand - qty),
+        synced: false,
+      });
+    } else {
+      name = wasteTargetId; // dish_name
+      cost = qty * dishUnitCost(wasteTargetId);
+      // A burnt/dropped plate was already cooked from stock already deducted
+      // when the ticket was marked prepared, so ingredient stock is untouched here.
+    }
+
+    await db.wasteLogs.add({
+      waste_id: crypto.randomUUID(),
+      dish_or_ingredient: name,
+      quantity: qty,
+      reason: wasteReason,
+      logged_by_cook_id: currentUser.user_id,
+      deduction_flag: deductFromPay,
+      timestamp: new Date().toISOString(),
+      synced: false,
+    });
+
+    if (deductFromPay) {
+      const reasonLabel = WASTE_REASONS.find((r) => r.value === wasteReason)?.label ?? wasteReason;
+      await db.staffLedgers.add({
+        ledger_id: crypto.randomUUID(),
+        staff_id: currentUser.user_id,
+        date: new Date().toISOString(),
+        shortage_amount: 0,
+        spoilage_cost: cost,
+        reason: `Waste: ${qty} x ${name} — ${reasonLabel}`,
+        payroll_deduction_status: 'pending',
+        synced: false,
+      });
+    }
+
+    requestSync();
+    resetWasteForm();
+    setShowWasteForm(false);
+  };
 
   // Handle Mark as Prepared & Deplete Ingredients
   const handleCompleteOrder = async (orderId: string, items: OrderItem[]) => {
@@ -88,6 +190,14 @@ export const KitchenDisplay: React.FC = () => {
           <span className="block text-[9px] font-mono text-zinc-500 uppercase">QUEUED</span>
         </div>
       </div>
+
+      {/* Log Waste / Spoilage */}
+      <button
+        onClick={() => setShowWasteForm(true)}
+        className="w-full py-2.5 bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 text-zinc-300 font-mono font-bold uppercase tracking-wider rounded-xl text-xs transition flex items-center justify-center gap-1.5"
+      >
+        <AlertTriangle className="w-3.5 h-3.5 text-red-400" /> Log Waste / Spoilage
+      </button>
 
       {/* Orders List */}
       <div className="space-y-4">
@@ -188,6 +298,115 @@ export const KitchenDisplay: React.FC = () => {
           })}
         </div>
       </div>
+
+      {/* Log Waste Modal */}
+      {showWasteForm && (
+        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/70 backdrop-blur-sm p-4">
+          <div className="relative w-full max-w-sm bg-[#0f1117] border border-zinc-800 rounded-3xl p-5 shadow-2xl space-y-4">
+            <div className="flex items-center justify-between">
+              <h3 className="font-mono text-xs font-bold text-white uppercase tracking-wider">
+                Log Waste / Spoilage
+              </h3>
+              <button
+                onClick={() => {
+                  setShowWasteForm(false);
+                  resetWasteForm();
+                }}
+                className="p-1.5 rounded-lg bg-zinc-900 hover:bg-zinc-800 text-zinc-400 border border-zinc-800"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
+
+            <div className="space-y-3">
+              <div>
+                <label className="text-[10px] font-mono text-zinc-500 uppercase tracking-widest mb-1 block">
+                  Reason
+                </label>
+                <div className="grid grid-cols-1 gap-2">
+                  {WASTE_REASONS.map((r) => (
+                    <button
+                      key={r.value}
+                      onClick={() => {
+                        setWasteReason(r.value);
+                        setWasteTargetId('');
+                      }}
+                      className={`py-2 text-[10px] font-mono font-bold uppercase tracking-wider rounded-xl border transition ${
+                        wasteReason === r.value
+                          ? 'bg-orange-500 text-zinc-950 border-orange-400'
+                          : 'bg-zinc-800 text-zinc-400 border-zinc-700'
+                      }`}
+                    >
+                      {r.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div>
+                <label className="text-[10px] font-mono text-zinc-500 uppercase tracking-widest mb-1 block">
+                  {wasteTargetKind === 'dish' ? 'Dish' : 'Ingredient'}
+                </label>
+                <select
+                  value={wasteTargetId}
+                  onChange={(e) => setWasteTargetId(e.target.value)}
+                  className="w-full bg-zinc-950 border border-zinc-700 rounded-xl px-3 py-2.5 text-xs text-white font-mono focus:outline-none focus:border-orange-500"
+                >
+                  <option value="">Select...</option>
+                  {wasteTargetKind === 'dish'
+                    ? dishes.map((d) => (
+                        <option key={d.dish_name} value={d.dish_name}>
+                          {d.dish_name}
+                        </option>
+                      ))
+                    : ingredients?.map((i) => (
+                        <option key={i.ingredient_id} value={i.ingredient_id}>
+                          {i.name} ({i.unit})
+                        </option>
+                      ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="text-[10px] font-mono text-zinc-500 uppercase tracking-widest mb-1 block">
+                  Quantity {wasteTargetKind === 'dish' ? '(plates)' : ''}
+                </label>
+                <input
+                  type="number"
+                  inputMode="decimal"
+                  placeholder="0"
+                  value={wasteQty}
+                  onChange={(e) => setWasteQty(e.target.value)}
+                  className="w-full bg-zinc-950 border border-zinc-700 rounded-xl px-3 py-2.5 text-xs text-white font-mono focus:outline-none focus:border-orange-500"
+                />
+              </div>
+
+              <label className="flex items-center gap-2 text-[10px] font-mono text-zinc-400 uppercase tracking-wider">
+                <input
+                  type="checkbox"
+                  checked={deductFromPay}
+                  onChange={(e) => setDeductFromPay(e.target.checked)}
+                  className="w-3.5 h-3.5 accent-orange-500"
+                />
+                Deduct cost from my payroll ledger
+              </label>
+
+              {wasteError && (
+                <p className="text-[11px] font-mono text-red-400 bg-red-500/10 border border-red-500/20 rounded-lg px-3 py-2">
+                  {wasteError}
+                </p>
+              )}
+            </div>
+
+            <button
+              onClick={handleLogWaste}
+              className="w-full py-3.5 bg-orange-500 hover:bg-orange-400 active:scale-[0.98] text-zinc-950 font-mono font-bold uppercase tracking-wider text-xs rounded-2xl transition shadow-lg shadow-orange-500/20"
+            >
+              Log Waste
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

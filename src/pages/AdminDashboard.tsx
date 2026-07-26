@@ -222,6 +222,31 @@ export const AdminDashboard: React.FC = () => {
     requestSync();
   };
 
+  // ---------------------------------------------------------------------
+  // Credit / Tabs — bills a waiter settled as "credit" sit here until the
+  // customer actually pays, or the owner writes the debt off as a loss.
+  // ---------------------------------------------------------------------
+  const creditOrders = (orders ?? [])
+    .filter((o) => o.payment_status === 'credit')
+    .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+
+  const handleCollectCredit = async (orderId: string, method: 'cash' | 'mpesa') => {
+    await db.orders.update(orderId, {
+      payment_status: 'paid',
+      payment_method: method,
+      synced: false,
+    });
+    requestSync();
+  };
+
+  const handleWriteOffCredit = async (orderId: string) => {
+    await db.orders.update(orderId, {
+      payment_status: 'unpaid_loss',
+      synced: false,
+    });
+    requestSync();
+  };
+
   return (
     <div className="space-y-5 max-w-md mx-auto pb-20">
       {/* Header Badge */}
@@ -326,6 +351,65 @@ export const AdminDashboard: React.FC = () => {
           )}
         </div>
       </div>
+
+      {/* ===================== CREDIT / TABS ===================== */}
+      {creditOrders.length > 0 && (
+        <div className="relative bg-[#0f1117] border border-zinc-800/80 rounded-2xl p-4 shadow-xl space-y-3">
+          <div className="flex items-center justify-between border-b border-zinc-800/80 pb-2">
+            <div className="flex items-center gap-2">
+              <Wallet className="w-4 h-4 text-orange-400" />
+              <span className="font-mono text-xs font-bold text-zinc-300 uppercase tracking-wider">
+                Credit / Tabs
+              </span>
+            </div>
+            <span className="text-[10px] font-mono text-zinc-500">
+              {creditOrders.length} open
+            </span>
+          </div>
+
+          <div className="space-y-2.5">
+            {creditOrders.map((o) => (
+              <div
+                key={o.order_id}
+                className="bg-zinc-900/60 border border-zinc-800/60 rounded-xl p-3 space-y-2"
+              >
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-xs font-semibold text-white">
+                      Ticket #{o.order_id.slice(0, 6)}
+                    </p>
+                    <p className="text-[10px] font-mono text-zinc-500">
+                      {staffMap.get(o.placed_by_waiter_id)?.name ?? 'Unknown waiter'} ·{' '}
+                      {new Date(o.timestamp).toLocaleDateString([], { day: '2-digit', month: 'short' })}
+                    </p>
+                  </div>
+                  <span className="text-orange-400 font-mono font-bold text-sm">{money(o.total_amount)}</span>
+                </div>
+                <div className="grid grid-cols-3 gap-1.5">
+                  <button
+                    onClick={() => handleCollectCredit(o.order_id, 'cash')}
+                    className="py-1.5 bg-zinc-800 text-zinc-300 rounded-lg font-mono text-[9px] font-bold uppercase tracking-wider active:scale-95 transition"
+                  >
+                    Paid Cash
+                  </button>
+                  <button
+                    onClick={() => handleCollectCredit(o.order_id, 'mpesa')}
+                    className="py-1.5 bg-zinc-800 text-zinc-300 rounded-lg font-mono text-[9px] font-bold uppercase tracking-wider active:scale-95 transition"
+                  >
+                    Paid M-Pesa
+                  </button>
+                  <button
+                    onClick={() => handleWriteOffCredit(o.order_id)}
+                    className="py-1.5 bg-red-500/10 border border-red-500/20 text-red-400 rounded-lg font-mono text-[9px] font-bold uppercase tracking-wider active:scale-95 transition"
+                  >
+                    Write Off
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* ===================== STOCK MONITOR (quick glance) ===================== */}
       <div className="relative bg-[#0f1117] border border-zinc-800/80 rounded-2xl p-4 shadow-xl space-y-3">

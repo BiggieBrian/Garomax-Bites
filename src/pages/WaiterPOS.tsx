@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db } from '../db/kibandaDB';
 import { requestSync } from '../db/sync';
+import { supabase, isSupabaseConfigured } from '../lib/supabase';
 import { useAuth } from '../context/AuthContext';
 import type { Order, OrderItem, PaymentMethod } from '../types';
 import { Plus, Minus, Send, Clock, CheckCircle, ShoppingBag, Flame, ChefHat, Mail, MessageSquareText, X } from 'lucide-react';
@@ -89,10 +90,12 @@ export const WaiterPOS: React.FC = () => {
     setCart([]);
   };
 
-  // Settle Payment after the customer finishes eating
+  // Settle Payment after the customer finishes eating. A credit sale isn't
+  // collected yet, so it gets its own payment_status — the admin dashboard's
+  // Credit / Tabs section is where it later gets marked collected or written off.
   const handleConfirmSettlement = async (orderId: string) => {
     await db.orders.update(orderId, {
-      payment_status: 'paid',
+      payment_status: paymentMethod === 'credit' ? 'credit' : 'paid',
       payment_method: paymentMethod,
       mpesa_code: paymentMethod === 'mpesa' ? mpesaCode : undefined,
       synced: false,
@@ -122,17 +125,37 @@ export const WaiterPOS: React.FC = () => {
     return lines.join('\n');
   };
 
-  // Send receipt — currently opens the customer's email client with a prefilled
-  // message (no backend needed). Swap this out for a Supabase edge function
-  // calling an email API (and, for phone, an SMS API like Africa's Talking)
-  // once you're ready to send receipts automatically without user interaction.
-  const handleSendReceipt = (order: Order) => {
+  // Send receipt via the send-receipt Edge Function (Resend under the hood).
+  // Falls back to nothing actionable if Supabase isn't configured — email
+  // sending needs a live backend, unlike the rest of this local-first app.
+  const [sendingReceipt, setSendingReceipt] = useState(false);
+  const [receiptSendError, setReceiptSendError] = useState('');
+
+  const handleSendReceipt = async (order: Order) => {
     if (!receiptContact.trim()) return;
 
     if (receiptChannel === 'email') {
-      const subject = encodeURIComponent(`Garomax Bites Receipt — #${order.order_id.slice(0, 6)}`);
-      const body = encodeURIComponent(buildReceiptText(order));
-      window.location.href = `mailto:${receiptContact.trim()}?subject=${subject}&body=${body}`;
+      if (!isSupabaseConfigured) {
+        setReceiptSendError('Supabase isn\'t configured on this device — can\'t send email.');
+        return;
+      }
+      setSendingReceipt(true);
+      setReceiptSendError('');
+      try {
+        const { error } = await supabase.functions.invoke('send-receipt', {
+          body: {
+            to: receiptContact.trim(),
+            subject: `Garomax Bites Receipt — #${order.order_id.slice(0, 6)}`,
+            text: buildReceiptText(order),
+          },
+        });
+        if (error) throw error;
+      } catch (err) {
+        setSendingReceipt(false);
+        setReceiptSendError(err instanceof Error ? err.message : 'Could not send receipt — try again.');
+        return;
+      }
+      setSendingReceipt(false);
     }
 
     setActiveDrawer(null);
@@ -339,7 +362,7 @@ export const WaiterPOS: React.FC = () => {
                       <p className="text-[11px] font-mono font-bold text-zinc-300 uppercase tracking-wider">
                         SELECT PAYMENT METHOD:
                       </p>
-                      <div className="grid grid-cols-2 gap-2">
+                      <div className="grid grid-cols-3 gap-2">
                         <button
                           onClick={() => setPaymentMethod('cash')}
                           className={`py-2 text-xs font-mono font-bold uppercase tracking-wider rounded-xl border transition ${
@@ -360,6 +383,16 @@ export const WaiterPOS: React.FC = () => {
                         >
                           M-PESA
                         </button>
+                        <button
+                          onClick={() => setPaymentMethod('credit')}
+                          className={`py-2 text-xs font-mono font-bold uppercase tracking-wider rounded-xl border transition ${
+                            paymentMethod === 'credit'
+                              ? 'bg-orange-500 text-zinc-950 border-orange-400'
+                              : 'bg-zinc-800 text-zinc-400 border-zinc-700'
+                          }`}
+                        >
+                          CREDIT
+                        </button>
                       </div>
 
                       {paymentMethod === 'mpesa' && (
@@ -370,6 +403,13 @@ export const WaiterPOS: React.FC = () => {
                           onChange={(e) => setMpesaCode(e.target.value.toUpperCase())}
                           className="w-full bg-zinc-950 border border-zinc-700 rounded-xl px-3 py-2 text-xs text-white uppercase font-mono tracking-wider focus:outline-none focus:border-orange-500"
                         />
+                      )}
+
+                      {paymentMethod === 'credit' && (
+                        <p className="text-[10px] font-mono text-zinc-500 leading-relaxed">
+                          This bill will move to the owner's Credit / Tabs list as outstanding —
+                          it isn't counted as collected revenue until it's settled there.
+                        </p>
                       )}
 
                       <div className="flex gap-2 pt-1">
@@ -383,7 +423,7 @@ export const WaiterPOS: React.FC = () => {
                           onClick={() => handleConfirmSettlement(order.order_id)}
                           className="flex-1 py-2 bg-orange-500 text-zinc-950 rounded-xl font-mono text-[11px] font-bold uppercase tracking-wider shadow-lg shadow-orange-500/20"
                         >
-                          CONFIRM PAID
+                          {paymentMethod === 'credit' ? 'CONFIRM ON CREDIT' : 'CONFIRM PAID'}
                         </button>
                       </div>
                     </div>
@@ -435,12 +475,18 @@ export const WaiterPOS: React.FC = () => {
                         className="w-full bg-zinc-950 border border-zinc-700 rounded-xl px-3 py-2 text-xs text-white font-mono tracking-wide focus:outline-none focus:border-orange-500"
                       />
 
+                      {receiptSendError && (
+                        <p className="text-[10px] font-mono text-red-400 bg-red-500/10 border border-red-500/20 rounded-lg px-2.5 py-2">
+                          {receiptSendError}
+                        </p>
+                      )}
+
                       <button
                         onClick={() => handleSendReceipt(order)}
-                        disabled={!receiptContact.trim()}
+                        disabled={!receiptContact.trim() || sendingReceipt}
                         className="w-full py-2.5 bg-orange-500 hover:bg-orange-400 disabled:opacity-40 disabled:pointer-events-none text-zinc-950 rounded-xl font-mono text-[11px] font-bold uppercase tracking-wider shadow-lg shadow-orange-500/20 flex items-center justify-center gap-1.5"
                       >
-                        <Send className="w-3.5 h-3.5" /> SEND RECEIPT
+                        <Send className="w-3.5 h-3.5" /> {sendingReceipt ? 'SENDING…' : 'SEND RECEIPT'}
                       </button>
                     </div>
                   )}
