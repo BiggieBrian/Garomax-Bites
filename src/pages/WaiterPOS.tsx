@@ -1,9 +1,10 @@
 import React, { useState } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db } from '../db/kibandaDB';
+import { requestSync } from '../db/sync';
 import { useAuth } from '../context/AuthContext';
-import type { OrderItem, PaymentMethod } from '../types';
-import { Plus, Minus, Send, Clock, CheckCircle, ShoppingBag } from 'lucide-react';
+import type { Order, OrderItem, PaymentMethod } from '../types';
+import { Plus, Minus, Send, Clock, CheckCircle, ShoppingBag, Flame, ChefHat, Mail, MessageSquareText, X } from 'lucide-react';
 
 export const WaiterPOS: React.FC = () => {
   const { currentUser } = useAuth();
@@ -25,10 +26,14 @@ export const WaiterPOS: React.FC = () => {
   // Cart state
   const [cart, setCart] = useState<OrderItem[]>([]);
 
-  // Settlement modal state for pending orders
-  const [selectedOrderForPayment, setSelectedOrderForPayment] = useState<string | null>(null);
+  // Settlement / receipt drawer state for pending orders — only one drawer
+  // open per card at a time, independent of whichever kitchen_status the
+  // ticket is currently in.
+  const [activeDrawer, setActiveDrawer] = useState<{ orderId: string; mode: 'payment' | 'receipt' } | null>(null);
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('cash');
   const [mpesaCode, setMpesaCode] = useState('');
+  const [receiptChannel, setReceiptChannel] = useState<'email' | 'phone'>('email');
+  const [receiptContact, setReceiptContact] = useState('');
 
   // Add dish to cart
   const addToCart = (dishName: string, price: number) => {
@@ -69,6 +74,7 @@ export const WaiterPOS: React.FC = () => {
     const newOrder = {
       order_id: crypto.randomUUID(),
       payment_status: 'active' as const,
+      kitchen_status: 'queued' as const,
       items: cart,
       total_amount: totalAmount,
       placed_by_waiter_id: currentUser.user_id,
@@ -77,6 +83,7 @@ export const WaiterPOS: React.FC = () => {
     };
 
     await db.orders.add(newOrder);
+    requestSync();
 
     // Reset cart state after sending ticket
     setCart([]);
@@ -90,10 +97,47 @@ export const WaiterPOS: React.FC = () => {
       mpesa_code: paymentMethod === 'mpesa' ? mpesaCode : undefined,
       synced: false,
     });
+    requestSync();
 
-    setSelectedOrderForPayment(null);
+    setActiveDrawer(null);
     setMpesaCode('');
     setPaymentMethod('cash');
+  };
+
+  // Build a plain-text receipt for a ticket
+  const buildReceiptText = (order: Order) => {
+    const lines = [
+      'GAROMAX BITES',
+      `Ticket #${order.order_id.slice(0, 6)}`,
+      new Date(order.timestamp).toLocaleString(),
+      '',
+      ...order.items.map(
+        (it) => `${it.quantity}x ${it.dish_name}  —  KES ${it.unit_price * it.quantity}`
+      ),
+      '',
+      `TOTAL: KES ${order.total_amount}`,
+      '',
+      'Thank you for dining with us!',
+    ];
+    return lines.join('\n');
+  };
+
+  // Send receipt — currently opens the customer's email client with a prefilled
+  // message (no backend needed). Swap this out for a Supabase edge function
+  // calling an email API (and, for phone, an SMS API like Africa's Talking)
+  // once you're ready to send receipts automatically without user interaction.
+  const handleSendReceipt = (order: Order) => {
+    if (!receiptContact.trim()) return;
+
+    if (receiptChannel === 'email') {
+      const subject = encodeURIComponent(`Garomax Bites Receipt — #${order.order_id.slice(0, 6)}`);
+      const body = encodeURIComponent(buildReceiptText(order));
+      window.location.href = `mailto:${receiptContact.trim()}?subject=${subject}&body=${body}`;
+    }
+
+    setActiveDrawer(null);
+    setReceiptContact('');
+    setReceiptChannel('email');
   };
 
   return (
@@ -243,7 +287,8 @@ export const WaiterPOS: React.FC = () => {
             </div>
           ) : (
             activeOrders.map((order) => {
-              const isSelected = selectedOrderForPayment === order.order_id;
+              const drawerMode = activeDrawer?.orderId === order.order_id ? activeDrawer.mode : null;
+              const isReady = order.kitchen_status === 'ready';
 
               return (
                 <div
@@ -263,6 +308,18 @@ export const WaiterPOS: React.FC = () => {
                     </span>
                   </div>
 
+                  {/* Kitchen status — independent of payment, purely informational for the waiter */}
+                  <div
+                    className={`flex items-center gap-1.5 w-fit px-2 py-1 rounded-lg border font-mono text-[10px] font-bold uppercase tracking-wider ${
+                      isReady
+                        ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400'
+                        : 'bg-orange-500/10 border-orange-500/30 text-orange-400'
+                    }`}
+                  >
+                    {isReady ? <ChefHat className="w-3 h-3" /> : <Flame className="w-3 h-3 animate-pulse" />}
+                    {isReady ? 'Ready to Serve' : 'Cooking'}
+                  </div>
+
                   <div className="text-xs text-zinc-300 space-y-1 font-sans">
                     {order.items.map((it, idx) => (
                       <div key={idx} className="flex justify-between">
@@ -277,7 +334,7 @@ export const WaiterPOS: React.FC = () => {
                   </div>
 
                   {/* Settle Payment Drawer */}
-                  {isSelected ? (
+                  {drawerMode === 'payment' && (
                     <div className="pt-3 border-t border-zinc-800/80 space-y-3 bg-zinc-900/80 p-3 rounded-xl">
                       <p className="text-[11px] font-mono font-bold text-zinc-300 uppercase tracking-wider">
                         SELECT PAYMENT METHOD:
@@ -317,7 +374,7 @@ export const WaiterPOS: React.FC = () => {
 
                       <div className="flex gap-2 pt-1">
                         <button
-                          onClick={() => setSelectedOrderForPayment(null)}
+                          onClick={() => setActiveDrawer(null)}
                           className="flex-1 py-2 bg-zinc-800 text-zinc-400 rounded-xl font-mono text-[11px] font-bold uppercase tracking-wider"
                         >
                           CANCEL
@@ -330,13 +387,80 @@ export const WaiterPOS: React.FC = () => {
                         </button>
                       </div>
                     </div>
-                  ) : (
-                    <button
-                      onClick={() => setSelectedOrderForPayment(order.order_id)}
-                      className="w-full py-2.5 bg-orange-500/10 hover:bg-orange-500/20 border border-orange-500/30 text-orange-400 font-mono font-bold uppercase tracking-wider rounded-xl text-xs transition"
-                    >
-                      COLLECT PAYMENT & CLOSE BILL
-                    </button>
+                  )}
+
+                  {/* Send Receipt Drawer */}
+                  {drawerMode === 'receipt' && (
+                    <div className="pt-3 border-t border-zinc-800/80 space-y-3 bg-zinc-900/80 p-3 rounded-xl">
+                      <div className="flex items-center justify-between">
+                        <p className="text-[11px] font-mono font-bold text-zinc-300 uppercase tracking-wider">
+                          SEND RECEIPT VIA:
+                        </p>
+                        <button
+                          onClick={() => {
+                            setActiveDrawer(null);
+                            setReceiptContact('');
+                          }}
+                          className="text-zinc-500 hover:text-white"
+                        >
+                          <X className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-2">
+                        <button
+                          onClick={() => setReceiptChannel('email')}
+                          className={`py-2 text-xs font-mono font-bold uppercase tracking-wider rounded-xl border transition flex items-center justify-center gap-1.5 ${
+                            receiptChannel === 'email'
+                              ? 'bg-orange-500 text-zinc-950 border-orange-400'
+                              : 'bg-zinc-800 text-zinc-400 border-zinc-700'
+                          }`}
+                        >
+                          <Mail className="w-3.5 h-3.5" /> EMAIL
+                        </button>
+                        <button
+                          disabled
+                          title="Coming soon — SMS receipts"
+                          className="py-2 text-xs font-mono font-bold uppercase tracking-wider rounded-xl border bg-zinc-900 text-zinc-600 border-zinc-800 flex items-center justify-center gap-1.5 cursor-not-allowed"
+                        >
+                          <MessageSquareText className="w-3.5 h-3.5" /> SMS SOON
+                        </button>
+                      </div>
+
+                      <input
+                        type="email"
+                        placeholder="customer@email.com"
+                        value={receiptContact}
+                        onChange={(e) => setReceiptContact(e.target.value)}
+                        className="w-full bg-zinc-950 border border-zinc-700 rounded-xl px-3 py-2 text-xs text-white font-mono tracking-wide focus:outline-none focus:border-orange-500"
+                      />
+
+                      <button
+                        onClick={() => handleSendReceipt(order)}
+                        disabled={!receiptContact.trim()}
+                        className="w-full py-2.5 bg-orange-500 hover:bg-orange-400 disabled:opacity-40 disabled:pointer-events-none text-zinc-950 rounded-xl font-mono text-[11px] font-bold uppercase tracking-wider shadow-lg shadow-orange-500/20 flex items-center justify-center gap-1.5"
+                      >
+                        <Send className="w-3.5 h-3.5" /> SEND RECEIPT
+                      </button>
+                    </div>
+                  )}
+
+                  {/* Action Buttons */}
+                  {!drawerMode && (
+                    <div className="grid grid-cols-2 gap-2">
+                      <button
+                        onClick={() => setActiveDrawer({ orderId: order.order_id, mode: 'receipt' })}
+                        className="py-2.5 bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 text-zinc-300 font-mono font-bold uppercase tracking-wider rounded-xl text-xs transition flex items-center justify-center gap-1.5"
+                      >
+                        <Mail className="w-3.5 h-3.5" /> RECEIPT
+                      </button>
+                      <button
+                        onClick={() => setActiveDrawer({ orderId: order.order_id, mode: 'payment' })}
+                        className="py-2.5 bg-orange-500/10 hover:bg-orange-500/20 border border-orange-500/30 text-orange-400 font-mono font-bold uppercase tracking-wider rounded-xl text-xs transition"
+                      >
+                        COLLECT & CLOSE
+                      </button>
+                    </div>
                   )}
                 </div>
               );

@@ -1,13 +1,18 @@
 import React from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db } from '../db/kibandaDB';
+import { requestSync } from '../db/sync';
+import { useAuth } from '../context/AuthContext';
 import { Check, Flame, Package } from 'lucide-react';
 import type { OrderItem } from '../types';
 
 export const KitchenDisplay: React.FC = () => {
-  // Live query active orders waiting in the kitchen queue
+  const { currentUser } = useAuth();
+
+  // Live query the kitchen queue by prep status — independent of whether the
+  // waiter has collected payment yet. A ticket can be "ready" and still unpaid.
   const orders = useLiveQuery(
-    () => db.orders.where('payment_status').equals('active').reverse().toArray(),
+    () => db.orders.where('kitchen_status').equals('queued').reverse().toArray(),
     []
   );
 
@@ -42,14 +47,17 @@ export const KitchenDisplay: React.FC = () => {
       }
     }
 
-    // 2. Clear ticket from active kitchen queue
+    // 2. Mark the ticket ready for pickup — payment status is untouched;
+    // the waiter closes the bill independently, whenever the customer pays.
     await db.orders
       .where('order_id')
       .equals(orderId)
       .modify({
-        payment_status: 'paid', // or your target status once cooked
+        kitchen_status: 'ready',
+        confirmed_by_cook_id: currentUser?.user_id,
         synced: false,
       });
+    requestSync();
   };
 
   return (

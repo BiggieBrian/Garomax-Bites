@@ -27,6 +27,7 @@ export interface RecipeItem {
 
 export type PaymentStatus = 'active' | 'paid' | 'credit' | 'unpaid_loss';
 export type PaymentMethod = 'cash' | 'mpesa' | 'credit';
+export type KitchenStatus = 'queued' | 'ready';
 
 export interface OrderItem {
   dish_name: string;
@@ -40,6 +41,7 @@ export interface Order {
   payment_status: PaymentStatus;
   payment_method?: PaymentMethod;
   mpesa_code?: string;
+  kitchen_status: KitchenStatus;
   items: OrderItem[];
   total_amount: number;
   placed_by_waiter_id: string;

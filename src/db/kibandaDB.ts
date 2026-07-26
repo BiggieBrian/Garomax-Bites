@@ -20,6 +20,20 @@ export class KibandaDatabase extends Dexie {
       wasteLogs: 'waste_id, logged_by_cook_id, timestamp, synced',
       staffLedgers: 'ledger_id, staff_id, date, synced'
     });
+
+    // v2: kitchen prep status is now tracked separately from payment status,
+    // so "mark prepared" in the kitchen no longer closes the waiter's bill.
+    this.version(2).stores({
+      orders: 'order_id, payment_status, kitchen_status, placed_by_waiter_id, timestamp, synced',
+    }).upgrade(async (tx) => {
+      await tx.table('orders').toCollection().modify((order) => {
+        if (!order.kitchen_status) {
+          // Best-effort backfill: orders already marked paid under the old
+          // logic were also implicitly "prepared", so treat them as ready.
+          order.kitchen_status = order.payment_status === 'active' ? 'queued' : 'ready';
+        }
+      });
+    });
   }
 }
 

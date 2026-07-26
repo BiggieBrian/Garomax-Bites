@@ -1,0 +1,3821 @@
+This file is a merged representation of the entire codebase, combined into a single document by Repomix.
+
+<file_summary>
+This section contains a summary of this file.
+
+<purpose>
+This file contains a packed representation of the entire repository's contents.
+It is designed to be easily consumable by AI systems for analysis, code review,
+or other automated processes.
+</purpose>
+
+<file_format>
+The content is organized as follows:
+1. This summary section
+2. Repository information
+3. Directory structure
+4. Repository files (if enabled)
+5. Multiple file entries, each consisting of:
+  - File path as an attribute
+  - Full contents of the file
+</file_format>
+
+<usage_guidelines>
+- This file should be treated as read-only. Any changes should be made to the
+  original repository files, not this packed version.
+- When processing this file, use the file path to distinguish
+  between different files in the repository.
+- Be aware that this file may contain sensitive information. Handle it with
+  the same level of security as you would the original repository.
+</usage_guidelines>
+
+<notes>
+- Some files may have been excluded based on .gitignore rules and Repomix's configuration
+- Binary files are not included in this packed representation. Please refer to the Repository Structure section for a complete list of file paths, including binary files
+- Files matching patterns in .gitignore are excluded
+- Files matching default ignore patterns are excluded
+- Files are sorted by Git change count (files with more changes are at the bottom)
+</notes>
+
+</file_summary>
+
+<directory_structure>
+public/
+  favicon.svg
+  icons.svg
+src/
+  assets/
+    hero.png
+    react.svg
+    vite.svg
+  context/
+    AuthContext.tsx
+  db/
+    kibandaDB.ts
+    seedLocalData.ts
+    sync.ts
+  hooks/
+    useSyncStatus.ts
+  lib/
+    supabase.ts
+  pages/
+    AdminDashboard.tsx
+    KitchenDisplay.tsx
+    Login.tsx
+    StockMenuManager.tsx
+    WaiterPOS.tsx
+  types/
+    index.ts
+  App.css
+  App.tsx
+  index.css
+  main.tsx
+  vite-env.d.ts
+supabase/
+  schema.sql
+.env.example
+.gitignore
+eslint.config.js
+index.html
+package.json
+README.md
+tsconfig.app.json
+tsconfig.json
+tsconfig.node.json
+vite.config.ts
+</directory_structure>
+
+<files>
+This section contains the contents of the repository's files.
+
+<file path="src/db/sync.ts">
+import { supabase, isSupabaseConfigured } from '../lib/supabase';
+import { db } from './kibandaDB';
+import type {
+  User,
+  Ingredient,
+  RecipeItem,
+  Order,
+  WasteLog,
+  StaffLedger,
+} from '../types';
+
+export type SyncStatus = 'offline' | 'syncing' | 'synced' | 'error';
+
+type Listener = (status: SyncStatus, lastSync: Date | null) => void;
+
+let currentStatus: SyncStatus = isSupabaseConfigured ? 'offline' : 'offline';
+let lastSync: Date | null = null;
+const listeners = new Set<Listener>();
+
+function setStatus(status: SyncStatus) {
+  currentStatus = status;
+  listeners.forEach((l) => l(currentStatus, lastSync));
+}
+
+export function onSyncStatusChange(cb: Listener): () => void {
+  listeners.add(cb);
+  cb(currentStatus, lastSync);
+  return () => listeners.delete(cb);
+}
+
+// ---------------------------------------------------------------------------
+// Row <-> local type mapping. Orders and WasteLog store their date under
+// `timestamp` locally, but the Postgres column is called `ts` (avoids the
+// reserved-word-flavoured `timestamp` name in SQL).
+// ---------------------------------------------------------------------------
+
+const orderToRow = (o: Order) => ({
+  order_id: o.order_id,
+  payment_status: o.payment_status,
+  payment_method: o.payment_method ?? null,
+  mpesa_code: o.mpesa_code ?? null,
+  kitchen_status: o.kitchen_status,
+  items: o.items,
+  total_amount: o.total_amount,
+  placed_by_waiter_id: o.placed_by_waiter_id,
+  confirmed_by_cook_id: o.confirmed_by_cook_id ?? null,
+  ts: o.timestamp,
+});
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const orderFromRow = (r: any): Order => ({
+  order_id: r.order_id,
+  payment_status: r.payment_status,
+  payment_method: r.payment_method ?? undefined,
+  mpesa_code: r.mpesa_code ?? undefined,
+  kitchen_status: r.kitchen_status ?? 'queued',
+  items: r.items,
+  total_amount: r.total_amount,
+  placed_by_waiter_id: r.placed_by_waiter_id,
+  confirmed_by_cook_id: r.confirmed_by_cook_id ?? undefined,
+  timestamp: r.ts,
+  synced: true,
+});
+
+const wasteToRow = (w: WasteLog) => ({
+  waste_id: w.waste_id,
+  dish_or_ingredient: w.dish_or_ingredient,
+  quantity: w.quantity,
+  reason: w.reason,
+  logged_by_cook_id: w.logged_by_cook_id,
+  deduction_flag: w.deduction_flag,
+  ts: w.timestamp,
+});
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const wasteFromRow = (r: any): WasteLog => ({
+  waste_id: r.waste_id,
+  dish_or_ingredient: r.dish_or_ingredient,
+  quantity: r.quantity,
+  reason: r.reason,
+  logged_by_cook_id: r.logged_by_cook_id,
+  deduction_flag: r.deduction_flag,
+  timestamp: r.ts,
+  synced: true,
+});
+
+const ledgerToRow = (l: StaffLedger) => ({
+  ledger_id: l.ledger_id,
+  staff_id: l.staff_id,
+  date: l.date,
+  shortage_amount: l.shortage_amount,
+  spoilage_cost: l.spoilage_cost,
+  reason: l.reason,
+  payroll_deduction_status: l.payroll_deduction_status,
+});
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const ledgerFromRow = (r: any): StaffLedger => ({
+  ledger_id: r.ledger_id,
+  staff_id: r.staff_id,
+  date: r.date,
+  shortage_amount: r.shortage_amount,
+  spoilage_cost: r.spoilage_cost,
+  reason: r.reason,
+  payroll_deduction_status: r.payroll_deduction_status,
+  synced: true,
+});
+
+const ingredientToRow = (i: Ingredient) => ({
+  ingredient_id: i.ingredient_id,
+  name: i.name,
+  unit: i.unit,
+  quantity_on_hand: i.quantity_on_hand,
+  last_purchase_cost: i.last_purchase_cost,
+  low_stock_threshold: i.low_stock_threshold,
+});
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const ingredientFromRow = (r: any): Ingredient => ({
+  ingredient_id: r.ingredient_id,
+  name: r.name,
+  unit: r.unit,
+  quantity_on_hand: r.quantity_on_hand,
+  last_purchase_cost: r.last_purchase_cost,
+  low_stock_threshold: r.low_stock_threshold,
+  synced: true,
+});
+
+const userToRow = (u: User) => ({
+  user_id: u.user_id,
+  name: u.name,
+  role: u.role,
+  pin_code: u.pin_code,
+  active_shift: u.active_shift,
+});
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const userFromRow = (r: any): User => ({
+  user_id: r.user_id,
+  name: r.name,
+  role: r.role,
+  pin_code: r.pin_code,
+  active_shift: r.active_shift,
+});
+
+const recipeToRow = (r: RecipeItem) => ({
+  dish_name: r.dish_name,
+  ingredient_id: r.ingredient_id,
+  selling_price: r.selling_price,
+  quantity_per_plate: r.quantity_per_plate,
+});
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const recipeFromRow = (r: any): RecipeItem => ({
+  dish_name: r.dish_name,
+  ingredient_id: r.ingredient_id,
+  selling_price: r.selling_price,
+  quantity_per_plate: r.quantity_per_plate,
+});
+
+// ---------------------------------------------------------------------------
+// Push: send local unsynced rows up to Supabase, then mark them synced.
+// ---------------------------------------------------------------------------
+
+async function pushUnsyncedOrders() {
+  const rows = await db.orders.filter((o) => o.synced === false).toArray();
+  if (rows.length === 0) return;
+  const { error } = await supabase.from('orders').upsert(rows.map(orderToRow));
+  if (error) throw error;
+  await db.orders.bulkUpdate(rows.map((r) => ({ key: r.order_id, changes: { synced: true } })));
+}
+
+async function pushUnsyncedWaste() {
+  const rows = await db.wasteLogs.filter((w) => w.synced === false).toArray();
+  if (rows.length === 0) return;
+  const { error } = await supabase.from('waste_logs').upsert(rows.map(wasteToRow));
+  if (error) throw error;
+  await db.wasteLogs.bulkUpdate(rows.map((r) => ({ key: r.waste_id, changes: { synced: true } })));
+}
+
+async function pushUnsyncedLedgers() {
+  const rows = await db.staffLedgers.filter((l) => l.synced === false).toArray();
+  if (rows.length === 0) return;
+  const { error } = await supabase.from('staff_ledgers').upsert(rows.map(ledgerToRow));
+  if (error) throw error;
+  await db.staffLedgers.bulkUpdate(rows.map((r) => ({ key: r.ledger_id, changes: { synced: true } })));
+}
+
+async function pushUnsyncedIngredients() {
+  const rows = await db.ingredients.filter((i) => i.synced === false).toArray();
+  if (rows.length === 0) return;
+  const { error } = await supabase.from('ingredients').upsert(rows.map(ingredientToRow));
+  if (error) throw error;
+  await db.ingredients.bulkUpdate(
+    rows.map((r) => ({ key: r.ingredient_id, changes: { synced: true } }))
+  );
+}
+
+// Users and recipes are seeded/admin-managed and have no `synced` flag yet —
+// push everything currently held locally so a fresh install "claims" its
+// seed data in Supabase. Safe to call repeatedly (upsert is idempotent), and
+// cheap since these tables are small (a handful of staff, a few dozen recipe
+// rows), so we just do it on every sync pass rather than tracking dirtiness.
+async function pushAllUsersAndRecipes() {
+  const users = await db.users.toArray();
+  const recipes = await db.recipes.toArray();
+  if (users.length) {
+    const { error } = await supabase.from('users').upsert(users.map(userToRow));
+    if (error) throw error;
+  }
+  if (recipes.length) {
+    const { error } = await supabase.from('recipes').upsert(recipes.map(recipeToRow));
+    if (error) throw error;
+  }
+}
+
+/** Push every table's pending local changes up to Supabase. */
+export async function pushAll() {
+  if (!isSupabaseConfigured) return;
+  await Promise.all([
+    pushUnsyncedOrders(),
+    pushUnsyncedWaste(),
+    pushUnsyncedLedgers(),
+    pushUnsyncedIngredients(),
+    pushAllUsersAndRecipes(),
+  ]);
+}
+
+// ---------------------------------------------------------------------------
+// Deletes — Dexie tables don't queue offline deletes, so these push straight
+// to Supabase. Call them right after the matching local db.<table>.delete().
+// If the device is offline when a delete happens, other devices won't see it
+// until this is called again while online (no retry queue yet).
+// ---------------------------------------------------------------------------
+
+export async function deleteUserRemote(userId: string) {
+  if (!isSupabaseConfigured || !navigator.onLine) return;
+  const { error } = await supabase.from('users').delete().eq('user_id', userId);
+  if (error) console.error('[Garomax] delete user remote error', error);
+}
+
+export async function deleteIngredientRemote(ingredientId: string) {
+  if (!isSupabaseConfigured || !navigator.onLine) return;
+  const { error } = await supabase.from('ingredients').delete().eq('ingredient_id', ingredientId);
+  if (error) console.error('[Garomax] delete ingredient remote error', error);
+}
+
+export async function deleteRecipeDishRemote(dishName: string) {
+  if (!isSupabaseConfigured || !navigator.onLine) return;
+  const { error } = await supabase.from('recipes').delete().eq('dish_name', dishName);
+  if (error) console.error('[Garomax] delete dish remote error', error);
+}
+
+export async function deleteRecipeLineRemote(dishName: string, ingredientId: string) {
+  if (!isSupabaseConfigured || !navigator.onLine) return;
+  const { error } = await supabase
+    .from('recipes')
+    .delete()
+    .eq('dish_name', dishName)
+    .eq('ingredient_id', ingredientId);
+  if (error) console.error('[Garomax] delete recipe line remote error', error);
+}
+
+// ---------------------------------------------------------------------------
+// Pull: bring remote rows down into Dexie (used on startup and via realtime).
+// ---------------------------------------------------------------------------
+
+async function pullAll() {
+  const [users, ingredients, recipes, orders, waste, ledgers] = await Promise.all([
+    supabase.from('users').select('*'),
+    supabase.from('ingredients').select('*'),
+    supabase.from('recipes').select('*'),
+    supabase.from('orders').select('*'),
+    supabase.from('waste_logs').select('*'),
+    supabase.from('staff_ledgers').select('*'),
+  ]);
+
+  if (users.data?.length) await db.users.bulkPut(users.data.map(userFromRow));
+  if (ingredients.data?.length) await db.ingredients.bulkPut(ingredients.data.map(ingredientFromRow));
+  if (recipes.data?.length) await db.recipes.bulkPut(recipes.data.map(recipeFromRow));
+  if (orders.data?.length) await db.orders.bulkPut(orders.data.map(orderFromRow));
+  if (waste.data?.length) await db.wasteLogs.bulkPut(waste.data.map(wasteFromRow));
+  if (ledgers.data?.length) await db.staffLedgers.bulkPut(ledgers.data.map(ledgerFromRow));
+}
+
+// ---------------------------------------------------------------------------
+// Realtime: keep every open device's Dexie in step with Supabase as changes
+// land from any other device (waiter tablet, kitchen screen, admin phone).
+// ---------------------------------------------------------------------------
+
+function subscribeRealtime() {
+  const channel = supabase.channel('garomax-sync');
+
+  channel
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'orders' }, (payload) => {
+      if (payload.eventType === 'DELETE') {
+        if (payload.old?.order_id) db.orders.delete(payload.old.order_id);
+        return;
+      }
+      db.orders.put(orderFromRow(payload.new));
+    })
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'ingredients' }, (payload) => {
+      if (payload.eventType === 'DELETE') {
+        if (payload.old?.ingredient_id) db.ingredients.delete(payload.old.ingredient_id);
+        return;
+      }
+      db.ingredients.put(ingredientFromRow(payload.new));
+    })
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'waste_logs' }, (payload) => {
+      if (payload.eventType === 'DELETE') {
+        if (payload.old?.waste_id) db.wasteLogs.delete(payload.old.waste_id);
+        return;
+      }
+      db.wasteLogs.put(wasteFromRow(payload.new));
+    })
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'staff_ledgers' }, (payload) => {
+      if (payload.eventType === 'DELETE') {
+        if (payload.old?.ledger_id) db.staffLedgers.delete(payload.old.ledger_id);
+        return;
+      }
+      db.staffLedgers.put(ledgerFromRow(payload.new));
+    })
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'users' }, (payload) => {
+      if (payload.eventType === 'DELETE') {
+        if (payload.old?.user_id) db.users.delete(payload.old.user_id);
+        return;
+      }
+      db.users.put(userFromRow(payload.new));
+    })
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'recipes' }, (payload) => {
+      if (payload.eventType === 'DELETE') {
+        if (payload.old?.dish_name && payload.old?.ingredient_id) {
+          db.recipes.delete([payload.old.dish_name, payload.old.ingredient_id]);
+        }
+        return;
+      }
+      db.recipes.put(recipeFromRow(payload.new));
+    })
+    .subscribe();
+
+  return channel;
+}
+
+// ---------------------------------------------------------------------------
+// Public entry point
+// ---------------------------------------------------------------------------
+
+let started = false;
+let pushTimer: ReturnType<typeof setInterval> | null = null;
+
+/** Call once on app startup. No-ops safely if Supabase env vars aren't set. */
+export async function startSync() {
+  if (started) return;
+  started = true;
+
+  if (!isSupabaseConfigured) {
+    setStatus('offline');
+    return;
+  }
+
+  const runSync = async () => {
+    if (!navigator.onLine) {
+      setStatus('offline');
+      return;
+    }
+    try {
+      setStatus('syncing');
+      await pushAll();
+      lastSync = new Date();
+      setStatus('synced');
+    } catch (err) {
+      console.error('[Garomax] sync error', err);
+      setStatus('error');
+    }
+  };
+
+  try {
+    setStatus('syncing');
+    await pushAllUsersAndRecipes();
+    await pullAll();
+    lastSync = new Date();
+    setStatus('synced');
+  } catch (err) {
+    console.error('[Garomax] initial sync error', err);
+    setStatus('error');
+  }
+
+  subscribeRealtime();
+
+  // Safety-net push loop, in case a page write happens without calling
+  // requestSync() directly (e.g. future code paths).
+  pushTimer = setInterval(runSync, 5000);
+  window.addEventListener('online', runSync);
+  window.addEventListener('offline', () => setStatus('offline'));
+}
+
+/** Call after any local write for a near-instant push instead of waiting on the interval. */
+export function requestSync() {
+  if (!isSupabaseConfigured || !navigator.onLine) return;
+  pushAll()
+    .then(() => {
+      lastSync = new Date();
+      setStatus('synced');
+    })
+    .catch((err) => {
+      console.error('[Garomax] push error', err);
+      setStatus('error');
+    });
+}
+
+export function stopSync() {
+  if (pushTimer) clearInterval(pushTimer);
+  started = false;
+}
+</file>
+
+<file path="src/hooks/useSyncStatus.ts">
+import { useEffect, useState } from 'react';
+import { onSyncStatusChange, type SyncStatus } from '../db/sync';
+import { isSupabaseConfigured } from '../lib/supabase';
+
+export function useSyncStatus() {
+  const [status, setStatus] = useState<SyncStatus>('offline');
+  const [lastSync, setLastSync] = useState<Date | null>(null);
+
+  useEffect(() => onSyncStatusChange((s, t) => {
+    setStatus(s);
+    setLastSync(t);
+  }), []);
+
+  return { status, lastSync, configured: isSupabaseConfigured };
+}
+</file>
+
+<file path="src/lib/supabase.ts">
+import { createClient } from '@supabase/supabase-js';
+
+const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string | undefined;
+const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined;
+
+export const isSupabaseConfigured = Boolean(supabaseUrl && supabaseAnonKey);
+
+if (!isSupabaseConfigured) {
+  console.warn(
+    '[Garomax] Supabase env vars missing — running in local-only mode. ' +
+      'Set VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY in .env to enable cross-device sync.'
+  );
+}
+
+// When not configured, we still create a client pointed at placeholder values so imports
+// don't crash; isSupabaseConfigured gates every actual call site in sync.ts.
+export const supabase = createClient(
+  supabaseUrl || 'https://placeholder.supabase.co',
+  supabaseAnonKey || 'placeholder-anon-key'
+);
+</file>
+
+<file path="src/pages/StockMenuManager.tsx">
+import React, { useMemo, useState } from 'react';
+import { useLiveQuery } from 'dexie-react-hooks';
+import { db } from '../db/kibandaDB';
+import {
+  requestSync,
+  deleteIngredientRemote,
+  deleteRecipeDishRemote,
+  deleteRecipeLineRemote,
+} from '../db/sync';
+import type { Ingredient, RecipeItem } from '../types';
+import {
+  Package,
+  UtensilsCrossed,
+  Plus,
+  X,
+  Trash2,
+  PackagePlus,
+  Pencil,
+  Check,
+  AlertTriangle,
+} from 'lucide-react';
+
+const money = (n: number) => `KES ${n.toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
+const UNITS: Ingredient['unit'][] = ['g', 'kg', 'ml', 'l', 'pcs'];
+
+export const StockMenuManager: React.FC = () => {
+  const ingredients = useLiveQuery(() => db.ingredients.toArray(), []);
+  const recipes = useLiveQuery(() => db.recipes.toArray(), []);
+
+  const ingredientMap = new Map((ingredients ?? []).map((i) => [i.ingredient_id, i]));
+
+  const dishes = useMemo(() => {
+    const map = new Map<string, { dish_name: string; selling_price: number; lines: RecipeItem[] }>();
+    (recipes ?? []).forEach((r) => {
+      const entry = map.get(r.dish_name) ?? { dish_name: r.dish_name, selling_price: r.selling_price, lines: [] };
+      entry.lines.push(r);
+      entry.selling_price = r.selling_price;
+      map.set(r.dish_name, entry);
+    });
+    return Array.from(map.values()).sort((a, b) => a.dish_name.localeCompare(b.dish_name));
+  }, [recipes]);
+
+  const ingredientUsage = useMemo(() => {
+    const usage = new Map<string, number>();
+    (recipes ?? []).forEach((r) => usage.set(r.ingredient_id, (usage.get(r.ingredient_id) ?? 0) + 1));
+    return usage;
+  }, [recipes]);
+
+  // -------------------------------------------------------------------
+  // Add ingredient
+  // -------------------------------------------------------------------
+  const [showIngredientForm, setShowIngredientForm] = useState(false);
+  const [ingName, setIngName] = useState('');
+  const [ingUnit, setIngUnit] = useState<Ingredient['unit']>('kg');
+  const [ingQty, setIngQty] = useState('');
+  const [ingCost, setIngCost] = useState('');
+  const [ingThreshold, setIngThreshold] = useState('');
+  const [ingError, setIngError] = useState('');
+
+  const resetIngredientForm = () => {
+    setIngName('');
+    setIngUnit('kg');
+    setIngQty('');
+    setIngCost('');
+    setIngThreshold('');
+    setIngError('');
+  };
+
+  const handleAddIngredient = async () => {
+    setIngError('');
+    if (!ingName.trim()) return setIngError('Enter an ingredient name.');
+    const qty = parseFloat(ingQty);
+    const cost = parseFloat(ingCost);
+    const threshold = parseFloat(ingThreshold);
+    if (isNaN(qty) || qty < 0) return setIngError('Enter a valid starting quantity.');
+    if (isNaN(cost) || cost < 0) return setIngError('Enter a valid purchase cost.');
+    if (isNaN(threshold) || threshold < 0) return setIngError('Enter a valid low-stock threshold.');
+
+    await db.ingredients.add({
+      ingredient_id: crypto.randomUUID(),
+      name: ingName.trim(),
+      unit: ingUnit,
+      quantity_on_hand: qty,
+      last_purchase_cost: cost,
+      low_stock_threshold: threshold,
+      synced: false,
+    });
+    requestSync();
+    resetIngredientForm();
+    setShowIngredientForm(false);
+  };
+
+  // -------------------------------------------------------------------
+  // Restock existing ingredient
+  // -------------------------------------------------------------------
+  const [restockTarget, setRestockTarget] = useState<Ingredient | null>(null);
+  const [restockQty, setRestockQty] = useState('');
+  const [restockCost, setRestockCost] = useState('');
+
+  const handleRestock = async () => {
+    if (!restockTarget) return;
+    const addQty = parseFloat(restockQty);
+    if (isNaN(addQty) || addQty <= 0) return;
+    const newCost = restockCost.trim() ? parseFloat(restockCost) : restockTarget.last_purchase_cost;
+
+    await db.ingredients.update(restockTarget.ingredient_id, {
+      quantity_on_hand: restockTarget.quantity_on_hand + addQty,
+      last_purchase_cost: newCost,
+      synced: false,
+    });
+    requestSync();
+    setRestockTarget(null);
+    setRestockQty('');
+    setRestockCost('');
+  };
+
+  // -------------------------------------------------------------------
+  // Delete ingredient
+  // -------------------------------------------------------------------
+  const [confirmDeleteIngredient, setConfirmDeleteIngredient] = useState<string | null>(null);
+
+  const handleDeleteIngredient = async (id: string) => {
+    await db.ingredients.delete(id);
+    deleteIngredientRemote(id);
+    setConfirmDeleteIngredient(null);
+  };
+
+  // -------------------------------------------------------------------
+  // Add dish
+  // -------------------------------------------------------------------
+  const [showDishForm, setShowDishForm] = useState(false);
+  const [dishName, setDishName] = useState('');
+  const [dishPrice, setDishPrice] = useState('');
+  const [dishLines, setDishLines] = useState<{ ingredient_id: string; quantity_per_plate: string }[]>([
+    { ingredient_id: '', quantity_per_plate: '' },
+  ]);
+  const [dishError, setDishError] = useState('');
+
+  const resetDishForm = () => {
+    setDishName('');
+    setDishPrice('');
+    setDishLines([{ ingredient_id: '', quantity_per_plate: '' }]);
+    setDishError('');
+  };
+
+  const updateDishLine = (idx: number, field: 'ingredient_id' | 'quantity_per_plate', value: string) => {
+    setDishLines((prev) => prev.map((l, i) => (i === idx ? { ...l, [field]: value } : l)));
+  };
+
+  const handleCreateDish = async () => {
+    setDishError('');
+    const name = dishName.trim();
+    if (!name) return setDishError('Enter a dish name.');
+    if (dishes.some((d) => d.dish_name.toLowerCase() === name.toLowerCase()))
+      return setDishError('A dish with that name already exists.');
+    const price = parseFloat(dishPrice);
+    if (isNaN(price) || price <= 0) return setDishError('Enter a valid selling price.');
+
+    const validLines = dishLines.filter((l) => l.ingredient_id && l.quantity_per_plate);
+    if (validLines.length === 0) return setDishError('Add at least one ingredient.');
+    const ids = validLines.map((l) => l.ingredient_id);
+    if (new Set(ids).size !== ids.length) return setDishError('Each ingredient can only appear once per dish.');
+    for (const l of validLines) {
+      if (isNaN(parseFloat(l.quantity_per_plate)) || parseFloat(l.quantity_per_plate) <= 0) {
+        return setDishError('Enter a valid quantity for every ingredient line.');
+      }
+    }
+
+    await db.recipes.bulkAdd(
+      validLines.map((l) => ({
+        dish_name: name,
+        selling_price: price,
+        ingredient_id: l.ingredient_id,
+        quantity_per_plate: parseFloat(l.quantity_per_plate),
+      }))
+    );
+    requestSync();
+    resetDishForm();
+    setShowDishForm(false);
+  };
+
+  // -------------------------------------------------------------------
+  // Edit dish price inline
+  // -------------------------------------------------------------------
+  const [editingPriceDish, setEditingPriceDish] = useState<string | null>(null);
+  const [editingPriceValue, setEditingPriceValue] = useState('');
+
+  const handleSavePrice = async (dish_name: string) => {
+    const price = parseFloat(editingPriceValue);
+    if (isNaN(price) || price <= 0) {
+      setEditingPriceDish(null);
+      return;
+    }
+    await db.recipes.where('dish_name').equals(dish_name).modify({ selling_price: price });
+    requestSync();
+    setEditingPriceDish(null);
+    setEditingPriceValue('');
+  };
+
+  // -------------------------------------------------------------------
+  // Delete dish / remove a single ingredient line from a dish
+  // -------------------------------------------------------------------
+  const [confirmDeleteDish, setConfirmDeleteDish] = useState<string | null>(null);
+
+  const handleDeleteDish = async (dish_name: string) => {
+    await db.recipes.where('dish_name').equals(dish_name).delete();
+    deleteRecipeDishRemote(dish_name);
+    setConfirmDeleteDish(null);
+  };
+
+  const handleRemoveDishLine = async (dish_name: string, ingredient_id: string, lineCount: number) => {
+    if (lineCount <= 1) return; // guard: use Delete Dish instead of stripping the last ingredient
+    await db.recipes.delete([dish_name, ingredient_id]);
+    deleteRecipeLineRemote(dish_name, ingredient_id);
+  };
+
+  // -------------------------------------------------------------------
+  // Add an ingredient line to an existing dish
+  // -------------------------------------------------------------------
+  const [addingLineTo, setAddingLineTo] = useState<string | null>(null);
+  const [newLineIngredient, setNewLineIngredient] = useState('');
+  const [newLineQty, setNewLineQty] = useState('');
+
+  const handleAddLineToDish = async (dish_name: string, selling_price: number) => {
+    const qty = parseFloat(newLineQty);
+    if (!newLineIngredient || isNaN(qty) || qty <= 0) return;
+    await db.recipes.put({
+      dish_name,
+      ingredient_id: newLineIngredient,
+      selling_price,
+      quantity_per_plate: qty,
+    });
+    requestSync();
+    setAddingLineTo(null);
+    setNewLineIngredient('');
+    setNewLineQty('');
+  };
+
+  return (
+    <div className="space-y-5">
+      {/* ===================== INGREDIENTS ===================== */}
+      <div className="relative bg-[#0f1117] border border-zinc-800/80 rounded-2xl p-4 shadow-xl space-y-3">
+        <div className="flex items-center justify-between border-b border-zinc-800/80 pb-2">
+          <div className="flex items-center gap-2">
+            <Package className="w-4 h-4 text-orange-400" />
+            <span className="font-mono text-xs font-bold text-zinc-300 uppercase tracking-wider">
+              Ingredients
+            </span>
+          </div>
+          <button
+            onClick={() => setShowIngredientForm(true)}
+            className="flex items-center gap-1 text-[10px] font-mono font-bold uppercase tracking-wider text-orange-400 bg-orange-500/10 border border-orange-500/30 px-2.5 py-1.5 rounded-lg active:scale-95 transition"
+          >
+            <Plus className="w-3 h-3" /> Add
+          </button>
+        </div>
+
+        <div className="space-y-2 max-h-72 overflow-y-auto pr-1">
+          {(ingredients ?? []).length === 0 ? (
+            <p className="text-zinc-600 text-[11px] font-mono text-center py-6">No ingredients yet</p>
+          ) : (
+            ingredients?.map((ing) => {
+              const isLow = ing.quantity_on_hand <= ing.low_stock_threshold;
+              const usedIn = ingredientUsage.get(ing.ingredient_id) ?? 0;
+              const isConfirmingDelete = confirmDeleteIngredient === ing.ingredient_id;
+
+              return (
+                <div
+                  key={ing.ingredient_id}
+                  className={`p-2.5 rounded-xl border ${
+                    isLow ? 'bg-red-500/5 border-red-500/20' : 'bg-zinc-900/60 border-zinc-800/60'
+                  }`}
+                >
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="text-xs font-medium text-white">{ing.name}</p>
+                      <p className="text-[10px] font-mono text-zinc-500">
+                        {ing.quantity_on_hand} {ing.unit} on hand · {money(ing.last_purchase_cost)}/{ing.unit}
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                      {isLow && <AlertTriangle className="w-3.5 h-3.5 text-red-400" />}
+                      <button
+                        onClick={() => setRestockTarget(ing)}
+                        title="Restock"
+                        className="p-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-300"
+                      >
+                        <PackagePlus className="w-3.5 h-3.5" />
+                      </button>
+                      <button
+                        onClick={() => setConfirmDeleteIngredient(ing.ingredient_id)}
+                        title="Delete"
+                        className="p-1.5 rounded-lg bg-zinc-800 hover:bg-red-500/20 text-zinc-400 hover:text-red-400"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  </div>
+
+                  {isConfirmingDelete && (
+                    <div className="mt-2 pt-2 border-t border-zinc-800/60">
+                      {usedIn > 0 ? (
+                        <p className="text-[10px] font-mono text-red-400">
+                          Used in {usedIn} dish{usedIn > 1 ? 'es' : ''} — remove it from those recipes first.
+                        </p>
+                      ) : (
+                        <div className="flex gap-2">
+                          <button
+                            onClick={() => setConfirmDeleteIngredient(null)}
+                            className="flex-1 py-1.5 bg-zinc-800 text-zinc-400 rounded-lg font-mono text-[10px] font-bold uppercase"
+                          >
+                            Cancel
+                          </button>
+                          <button
+                            onClick={() => handleDeleteIngredient(ing.ingredient_id)}
+                            className="flex-1 py-1.5 bg-red-500/20 text-red-400 border border-red-500/30 rounded-lg font-mono text-[10px] font-bold uppercase"
+                          >
+                            Confirm Delete
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              );
+            })
+          )}
+        </div>
+      </div>
+
+      {/* ===================== DISHES / RECIPES ===================== */}
+      <div className="relative bg-[#0f1117] border border-zinc-800/80 rounded-2xl p-4 shadow-xl space-y-3">
+        <div className="flex items-center justify-between border-b border-zinc-800/80 pb-2">
+          <div className="flex items-center gap-2">
+            <UtensilsCrossed className="w-4 h-4 text-orange-400" />
+            <span className="font-mono text-xs font-bold text-zinc-300 uppercase tracking-wider">
+              Menu / Dishes
+            </span>
+          </div>
+          <button
+            onClick={() => setShowDishForm(true)}
+            disabled={(ingredients ?? []).length === 0}
+            className="flex items-center gap-1 text-[10px] font-mono font-bold uppercase tracking-wider text-orange-400 bg-orange-500/10 border border-orange-500/30 px-2.5 py-1.5 rounded-lg active:scale-95 transition disabled:opacity-30 disabled:pointer-events-none"
+          >
+            <Plus className="w-3 h-3" /> Add Dish
+          </button>
+        </div>
+
+        {(ingredients ?? []).length === 0 && (
+          <p className="text-[10px] font-mono text-zinc-600">Add at least one ingredient before creating a dish.</p>
+        )}
+
+        <div className="space-y-3">
+          {dishes.length === 0 ? (
+            <p className="text-zinc-600 text-[11px] font-mono text-center py-6">No dishes yet</p>
+          ) : (
+            dishes.map((dish) => {
+              const isEditingPrice = editingPriceDish === dish.dish_name;
+              const isConfirmingDelete = confirmDeleteDish === dish.dish_name;
+              const isAddingLine = addingLineTo === dish.dish_name;
+              const availableIngredients = (ingredients ?? []).filter(
+                (i) => !dish.lines.some((l) => l.ingredient_id === i.ingredient_id)
+              );
+
+              return (
+                <div key={dish.dish_name} className="bg-zinc-900/60 border border-zinc-800/60 rounded-xl p-3 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm font-semibold text-white">{dish.dish_name}</span>
+                    <div className="flex items-center gap-1.5">
+                      {isEditingPrice ? (
+                        <>
+                          <input
+                            type="number"
+                            autoFocus
+                            value={editingPriceValue}
+                            onChange={(e) => setEditingPriceValue(e.target.value)}
+                            className="w-16 bg-zinc-950 border border-orange-500/40 rounded-lg px-1.5 py-0.5 text-xs text-white font-mono text-right focus:outline-none"
+                          />
+                          <button
+                            onClick={() => handleSavePrice(dish.dish_name)}
+                            className="p-1 rounded-lg bg-orange-500 text-zinc-950"
+                          >
+                            <Check className="w-3 h-3" />
+                          </button>
+                        </>
+                      ) : (
+                        <button
+                          onClick={() => {
+                            setEditingPriceDish(dish.dish_name);
+                            setEditingPriceValue(String(dish.selling_price));
+                          }}
+                          className="flex items-center gap-1 text-orange-400 font-mono font-bold text-xs"
+                        >
+                          {money(dish.selling_price)} <Pencil className="w-3 h-3 opacity-60" />
+                        </button>
+                      )}
+                      <button
+                        onClick={() => setConfirmDeleteDish(dish.dish_name)}
+                        title="Delete dish"
+                        className="p-1.5 rounded-lg bg-zinc-800 hover:bg-red-500/20 text-zinc-400 hover:text-red-400"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Ingredient composition */}
+                  <div className="space-y-1">
+                    {dish.lines.map((line) => {
+                      const ing = ingredientMap.get(line.ingredient_id);
+                      return (
+                        <div
+                          key={line.ingredient_id}
+                          className="flex items-center justify-between text-[10px] font-mono text-zinc-400 bg-zinc-950/60 px-2 py-1 rounded-lg"
+                        >
+                          <span>{ing?.name ?? 'Unknown ingredient'}</span>
+                          <div className="flex items-center gap-2">
+                            <span>
+                              {line.quantity_per_plate} {ing?.unit}
+                            </span>
+                            {dish.lines.length > 1 && (
+                              <button
+                                onClick={() => handleRemoveDishLine(dish.dish_name, line.ingredient_id, dish.lines.length)}
+                                className="text-zinc-600 hover:text-red-400"
+                              >
+                                <X className="w-3 h-3" />
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+
+                  {/* Add ingredient line */}
+                  {isAddingLine ? (
+                    <div className="flex items-center gap-1.5 pt-1">
+                      <select
+                        value={newLineIngredient}
+                        onChange={(e) => setNewLineIngredient(e.target.value)}
+                        className="flex-1 bg-zinc-950 border border-zinc-700 rounded-lg px-2 py-1.5 text-[10px] text-white font-mono focus:outline-none focus:border-orange-500"
+                      >
+                        <option value="">Ingredient...</option>
+                        {availableIngredients.map((i) => (
+                          <option key={i.ingredient_id} value={i.ingredient_id}>
+                            {i.name}
+                          </option>
+                        ))}
+                      </select>
+                      <input
+                        type="number"
+                        placeholder="Qty"
+                        value={newLineQty}
+                        onChange={(e) => setNewLineQty(e.target.value)}
+                        className="w-14 bg-zinc-950 border border-zinc-700 rounded-lg px-1.5 py-1.5 text-[10px] text-white font-mono focus:outline-none focus:border-orange-500"
+                      />
+                      <button
+                        onClick={() => handleAddLineToDish(dish.dish_name, dish.selling_price)}
+                        className="p-1.5 rounded-lg bg-orange-500 text-zinc-950"
+                      >
+                        <Check className="w-3.5 h-3.5" />
+                      </button>
+                      <button
+                        onClick={() => setAddingLineTo(null)}
+                        className="p-1.5 rounded-lg bg-zinc-800 text-zinc-400"
+                      >
+                        <X className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  ) : (
+                    availableIngredients.length > 0 && (
+                      <button
+                        onClick={() => setAddingLineTo(dish.dish_name)}
+                        className="text-[10px] font-mono text-zinc-500 hover:text-orange-400 flex items-center gap-1"
+                      >
+                        <Plus className="w-3 h-3" /> Add ingredient
+                      </button>
+                    )
+                  )}
+
+                  {isConfirmingDelete && (
+                    <div className="flex gap-2 pt-1">
+                      <button
+                        onClick={() => setConfirmDeleteDish(null)}
+                        className="flex-1 py-1.5 bg-zinc-800 text-zinc-400 rounded-lg font-mono text-[10px] font-bold uppercase"
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        onClick={() => handleDeleteDish(dish.dish_name)}
+                        className="flex-1 py-1.5 bg-red-500/20 text-red-400 border border-red-500/30 rounded-lg font-mono text-[10px] font-bold uppercase"
+                      >
+                        Confirm Delete
+                      </button>
+                    </div>
+                  )}
+                </div>
+              );
+            })
+          )}
+        </div>
+      </div>
+
+      {/* Add Ingredient Modal */}
+      {showIngredientForm && (
+        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/70 backdrop-blur-sm p-4">
+          <div className="relative w-full max-w-sm bg-[#0f1117] border border-zinc-800 rounded-3xl p-5 shadow-2xl space-y-4">
+            <div className="flex items-center justify-between">
+              <h3 className="font-mono text-xs font-bold text-white uppercase tracking-wider">Add Ingredient</h3>
+              <button
+                onClick={() => {
+                  setShowIngredientForm(false);
+                  resetIngredientForm();
+                }}
+                className="p-1.5 rounded-lg bg-zinc-900 hover:bg-zinc-800 text-zinc-400 border border-zinc-800"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
+
+            <div className="space-y-3">
+              <div>
+                <label className="text-[10px] font-mono text-zinc-500 uppercase tracking-widest mb-1 block">Name</label>
+                <input
+                  type="text"
+                  value={ingName}
+                  onChange={(e) => setIngName(e.target.value)}
+                  placeholder="e.g. Tomatoes"
+                  className="w-full bg-zinc-950 border border-zinc-700 rounded-xl px-3 py-2.5 text-xs text-white font-mono focus:outline-none focus:border-orange-500"
+                />
+              </div>
+
+              <div>
+                <label className="text-[10px] font-mono text-zinc-500 uppercase tracking-widest mb-1 block">Unit</label>
+                <div className="grid grid-cols-5 gap-1.5">
+                  {UNITS.map((u) => (
+                    <button
+                      key={u}
+                      onClick={() => setIngUnit(u)}
+                      className={`py-2 text-[10px] font-mono font-bold uppercase rounded-lg border transition ${
+                        ingUnit === u
+                          ? 'bg-orange-500 text-zinc-950 border-orange-400'
+                          : 'bg-zinc-800 text-zinc-400 border-zinc-700'
+                      }`}
+                    >
+                      {u}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="text-[10px] font-mono text-zinc-500 uppercase tracking-widest mb-1 block">
+                    Starting Qty
+                  </label>
+                  <input
+                    type="number"
+                    inputMode="decimal"
+                    value={ingQty}
+                    onChange={(e) => setIngQty(e.target.value)}
+                    placeholder="0"
+                    className="w-full bg-zinc-950 border border-zinc-700 rounded-xl px-3 py-2.5 text-xs text-white font-mono focus:outline-none focus:border-orange-500"
+                  />
+                </div>
+                <div>
+                  <label className="text-[10px] font-mono text-zinc-500 uppercase tracking-widest mb-1 block">
+                    Cost / Unit (KES)
+                  </label>
+                  <input
+                    type="number"
+                    inputMode="decimal"
+                    value={ingCost}
+                    onChange={(e) => setIngCost(e.target.value)}
+                    placeholder="0"
+                    className="w-full bg-zinc-950 border border-zinc-700 rounded-xl px-3 py-2.5 text-xs text-white font-mono focus:outline-none focus:border-orange-500"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="text-[10px] font-mono text-zinc-500 uppercase tracking-widest mb-1 block">
+                  Low Stock Threshold
+                </label>
+                <input
+                  type="number"
+                  inputMode="decimal"
+                  value={ingThreshold}
+                  onChange={(e) => setIngThreshold(e.target.value)}
+                  placeholder="e.g. 5"
+                  className="w-full bg-zinc-950 border border-zinc-700 rounded-xl px-3 py-2.5 text-xs text-white font-mono focus:outline-none focus:border-orange-500"
+                />
+              </div>
+
+              {ingError && (
+                <p className="text-[11px] font-mono text-red-400 bg-red-500/10 border border-red-500/20 rounded-lg px-3 py-2">
+                  {ingError}
+                </p>
+              )}
+            </div>
+
+            <button
+              onClick={handleAddIngredient}
+              className="w-full py-3.5 bg-orange-500 hover:bg-orange-400 active:scale-[0.98] text-zinc-950 font-mono font-bold uppercase tracking-wider text-xs rounded-2xl transition shadow-lg shadow-orange-500/20"
+            >
+              Add Ingredient
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Restock Modal */}
+      {restockTarget && (
+        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/70 backdrop-blur-sm p-4">
+          <div className="relative w-full max-w-sm bg-[#0f1117] border border-zinc-800 rounded-3xl p-5 shadow-2xl space-y-4">
+            <div className="flex items-center justify-between">
+              <h3 className="font-mono text-xs font-bold text-white uppercase tracking-wider">
+                Restock {restockTarget.name}
+              </h3>
+              <button
+                onClick={() => {
+                  setRestockTarget(null);
+                  setRestockQty('');
+                  setRestockCost('');
+                }}
+                className="p-1.5 rounded-lg bg-zinc-900 hover:bg-zinc-800 text-zinc-400 border border-zinc-800"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
+
+            <p className="text-[10px] font-mono text-zinc-500">
+              Currently {restockTarget.quantity_on_hand} {restockTarget.unit} on hand
+            </p>
+
+            <div className="grid grid-cols-2 gap-2">
+              <div>
+                <label className="text-[10px] font-mono text-zinc-500 uppercase tracking-widest mb-1 block">
+                  Add Quantity
+                </label>
+                <input
+                  type="number"
+                  inputMode="decimal"
+                  autoFocus
+                  value={restockQty}
+                  onChange={(e) => setRestockQty(e.target.value)}
+                  placeholder="0"
+                  className="w-full bg-zinc-950 border border-zinc-700 rounded-xl px-3 py-2.5 text-xs text-white font-mono focus:outline-none focus:border-orange-500"
+                />
+              </div>
+              <div>
+                <label className="text-[10px] font-mono text-zinc-500 uppercase tracking-widest mb-1 block">
+                  New Cost / Unit
+                </label>
+                <input
+                  type="number"
+                  inputMode="decimal"
+                  value={restockCost}
+                  onChange={(e) => setRestockCost(e.target.value)}
+                  placeholder={String(restockTarget.last_purchase_cost)}
+                  className="w-full bg-zinc-950 border border-zinc-700 rounded-xl px-3 py-2.5 text-xs text-white font-mono focus:outline-none focus:border-orange-500"
+                />
+              </div>
+            </div>
+
+            <button
+              onClick={handleRestock}
+              disabled={!restockQty}
+              className="w-full py-3.5 bg-orange-500 hover:bg-orange-400 disabled:opacity-40 disabled:pointer-events-none active:scale-[0.98] text-zinc-950 font-mono font-bold uppercase tracking-wider text-xs rounded-2xl transition shadow-lg shadow-orange-500/20"
+            >
+              Confirm Restock
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Add Dish Modal */}
+      {showDishForm && (
+        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/70 backdrop-blur-sm p-4">
+          <div className="relative w-full max-w-sm bg-[#0f1117] border border-zinc-800 rounded-3xl p-5 shadow-2xl space-y-4 max-h-[85vh] overflow-y-auto">
+            <div className="flex items-center justify-between">
+              <h3 className="font-mono text-xs font-bold text-white uppercase tracking-wider">Add Dish</h3>
+              <button
+                onClick={() => {
+                  setShowDishForm(false);
+                  resetDishForm();
+                }}
+                className="p-1.5 rounded-lg bg-zinc-900 hover:bg-zinc-800 text-zinc-400 border border-zinc-800"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
+
+            <div className="space-y-3">
+              <div>
+                <label className="text-[10px] font-mono text-zinc-500 uppercase tracking-widest mb-1 block">
+                  Dish Name
+                </label>
+                <input
+                  type="text"
+                  value={dishName}
+                  onChange={(e) => setDishName(e.target.value)}
+                  placeholder="e.g. Beef Stew"
+                  className="w-full bg-zinc-950 border border-zinc-700 rounded-xl px-3 py-2.5 text-xs text-white font-mono focus:outline-none focus:border-orange-500"
+                />
+              </div>
+
+              <div>
+                <label className="text-[10px] font-mono text-zinc-500 uppercase tracking-widest mb-1 block">
+                  Selling Price (KES)
+                </label>
+                <input
+                  type="number"
+                  inputMode="decimal"
+                  value={dishPrice}
+                  onChange={(e) => setDishPrice(e.target.value)}
+                  placeholder="0"
+                  className="w-full bg-zinc-950 border border-zinc-700 rounded-xl px-3 py-2.5 text-xs text-white font-mono focus:outline-none focus:border-orange-500"
+                />
+              </div>
+
+              <div>
+                <label className="text-[10px] font-mono text-zinc-500 uppercase tracking-widest mb-1 block">
+                  Recipe (Ingredients per Plate)
+                </label>
+                <div className="space-y-2">
+                  {dishLines.map((line, idx) => (
+                    <div key={idx} className="flex items-center gap-1.5">
+                      <select
+                        value={line.ingredient_id}
+                        onChange={(e) => updateDishLine(idx, 'ingredient_id', e.target.value)}
+                        className="flex-1 bg-zinc-950 border border-zinc-700 rounded-lg px-2 py-2 text-[11px] text-white font-mono focus:outline-none focus:border-orange-500"
+                      >
+                        <option value="">Ingredient...</option>
+                        {(ingredients ?? []).map((i) => (
+                          <option key={i.ingredient_id} value={i.ingredient_id}>
+                            {i.name}
+                          </option>
+                        ))}
+                      </select>
+                      <input
+                        type="number"
+                        placeholder="Qty"
+                        value={line.quantity_per_plate}
+                        onChange={(e) => updateDishLine(idx, 'quantity_per_plate', e.target.value)}
+                        className="w-16 bg-zinc-950 border border-zinc-700 rounded-lg px-2 py-2 text-[11px] text-white font-mono focus:outline-none focus:border-orange-500"
+                      />
+                      {dishLines.length > 1 && (
+                        <button
+                          onClick={() => setDishLines((prev) => prev.filter((_, i) => i !== idx))}
+                          className="p-2 rounded-lg bg-zinc-800 text-zinc-400 hover:text-red-400"
+                        >
+                          <X className="w-3.5 h-3.5" />
+                        </button>
+                      )}
+                    </div>
+                  ))}
+                </div>
+                <button
+                  onClick={() => setDishLines((prev) => [...prev, { ingredient_id: '', quantity_per_plate: '' }])}
+                  className="mt-2 text-[10px] font-mono text-zinc-500 hover:text-orange-400 flex items-center gap-1"
+                >
+                  <Plus className="w-3 h-3" /> Add ingredient line
+                </button>
+              </div>
+
+              {dishError && (
+                <p className="text-[11px] font-mono text-red-400 bg-red-500/10 border border-red-500/20 rounded-lg px-3 py-2">
+                  {dishError}
+                </p>
+              )}
+            </div>
+
+            <button
+              onClick={handleCreateDish}
+              className="w-full py-3.5 bg-orange-500 hover:bg-orange-400 active:scale-[0.98] text-zinc-950 font-mono font-bold uppercase tracking-wider text-xs rounded-2xl transition shadow-lg shadow-orange-500/20"
+            >
+              Create Dish
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+</file>
+
+<file path="src/vite-env.d.ts">
+/// <reference types="vite/client" />
+
+interface ImportMetaEnv {
+  readonly VITE_SUPABASE_URL?: string;
+  readonly VITE_SUPABASE_ANON_KEY?: string;
+}
+
+interface ImportMeta {
+  readonly env: ImportMetaEnv;
+}
+</file>
+
+<file path="supabase/schema.sql">
+-- Garomax Bites — Supabase schema
+-- Run this in the Supabase SQL editor (Project → SQL Editor → New query)
+
+create table if not exists users (
+  user_id text primary key,
+  name text not null,
+  role text not null check (role in ('admin', 'cook', 'waiter')),
+  pin_code text not null,
+  active_shift boolean not null default true
+);
+
+create table if not exists ingredients (
+  ingredient_id text primary key,
+  name text not null,
+  unit text not null check (unit in ('g', 'kg', 'ml', 'l', 'pcs')),
+  quantity_on_hand numeric not null default 0,
+  last_purchase_cost numeric not null default 0,
+  low_stock_threshold numeric not null default 0
+);
+
+create table if not exists recipes (
+  dish_name text not null,
+  ingredient_id text not null references ingredients(ingredient_id) on delete cascade,
+  selling_price numeric not null,
+  quantity_per_plate numeric not null,
+  primary key (dish_name, ingredient_id)
+);
+
+create table if not exists orders (
+  order_id text primary key,
+  payment_status text not null check (payment_status in ('active', 'paid', 'credit', 'unpaid_loss')),
+  payment_method text check (payment_method in ('cash', 'mpesa', 'credit')),
+  mpesa_code text,
+  items jsonb not null,
+  total_amount numeric not null,
+  placed_by_waiter_id text not null references users(user_id),
+  confirmed_by_cook_id text references users(user_id),
+  ts timestamptz not null
+);
+
+create table if not exists waste_logs (
+  waste_id text primary key,
+  dish_or_ingredient text not null,
+  quantity numeric not null,
+  reason text not null check (reason in ('burnt_overcooked', 'spilled_dropped', 'spoiled_raw')),
+  logged_by_cook_id text not null references users(user_id),
+  deduction_flag boolean not null default false,
+  ts timestamptz not null
+);
+
+create table if not exists staff_ledgers (
+  ledger_id text primary key,
+  staff_id text not null references users(user_id),
+  date timestamptz not null,
+  shortage_amount numeric not null default 0,
+  spoilage_cost numeric not null default 0,
+  reason text not null,
+  payroll_deduction_status text not null check (payroll_deduction_status in ('pending', 'deducted', 'waived'))
+);
+
+-- Realtime: let all clients subscribe to row-level changes for cross-device sync
+alter publication supabase_realtime add table orders, ingredients, waste_logs, staff_ledgers, users, recipes;
+
+-- RLS: enabled with permissive policies for now, since staff auth is PIN-based (not Supabase Auth)
+-- and every device shares one anon key. This is fine for a single-location internal tool but is
+-- NOT safe if the anon key could ever be exposed to the public internet without restriction —
+-- tighten this later if you add real user accounts.
+alter table users enable row level security;
+alter table ingredients enable row level security;
+alter table recipes enable row level security;
+alter table orders enable row level security;
+alter table waste_logs enable row level security;
+alter table staff_ledgers enable row level security;
+
+create policy "allow all - users" on users for all using (true) with check (true);
+create policy "allow all - ingredients" on ingredients for all using (true) with check (true);
+create policy "allow all - recipes" on recipes for all using (true) with check (true);
+create policy "allow all - orders" on orders for all using (true) with check (true);
+create policy "allow all - waste_logs" on waste_logs for all using (true) with check (true);
+create policy "allow all - staff_ledgers" on staff_ledgers for all using (true) with check (true);
+</file>
+
+<file path=".env.example">
+
+</file>
+
+<file path="public/favicon.svg">
+<svg xmlns="http://www.w3.org/2000/svg" width="48" height="46" fill="none" viewBox="0 0 48 46"><path fill="#863bff" d="M25.946 44.938c-.664.845-2.021.375-2.021-.698V33.937a2.26 2.26 0 0 0-2.262-2.262H10.287c-.92 0-1.456-1.04-.92-1.788l7.48-10.471c1.07-1.497 0-3.578-1.842-3.578H1.237c-.92 0-1.456-1.04-.92-1.788L10.013.474c.214-.297.556-.474.92-.474h28.894c.92 0 1.456 1.04.92 1.788l-7.48 10.471c-1.07 1.498 0 3.579 1.842 3.579h11.377c.943 0 1.473 1.088.89 1.83L25.947 44.94z" style="fill:#863bff;fill:color(display-p3 .5252 .23 1);fill-opacity:1"/><mask id="a" width="48" height="46" x="0" y="0" maskUnits="userSpaceOnUse" style="mask-type:alpha"><path fill="#000" d="M25.842 44.938c-.664.844-2.021.375-2.021-.698V33.937a2.26 2.26 0 0 0-2.262-2.262H10.183c-.92 0-1.456-1.04-.92-1.788l7.48-10.471c1.07-1.498 0-3.579-1.842-3.579H1.133c-.92 0-1.456-1.04-.92-1.787L9.91.473c.214-.297.556-.474.92-.474h28.894c.92 0 1.456 1.04.92 1.788l-7.48 10.471c-1.07 1.498 0 3.578 1.842 3.578h11.377c.943 0 1.473 1.088.89 1.832L25.843 44.94z" style="fill:#000;fill-opacity:1"/></mask><g mask="url(#a)"><g filter="url(#b)"><ellipse cx="5.508" cy="14.704" fill="#ede6ff" rx="5.508" ry="14.704" style="fill:#ede6ff;fill:color(display-p3 .9275 .9033 1);fill-opacity:1" transform="matrix(.00324 1 1 -.00324 -4.47 31.516)"/></g><g filter="url(#c)"><ellipse cx="10.399" cy="29.851" fill="#ede6ff" rx="10.399" ry="29.851" style="fill:#ede6ff;fill:color(display-p3 .9275 .9033 1);fill-opacity:1" transform="matrix(.00324 1 1 -.00324 -39.328 7.883)"/></g><g filter="url(#d)"><ellipse cx="5.508" cy="30.487" fill="#7e14ff" rx="5.508" ry="30.487" style="fill:#7e14ff;fill:color(display-p3 .4922 .0767 1);fill-opacity:1" transform="rotate(89.814 -25.913 -14.639)scale(1 -1)"/></g><g filter="url(#e)"><ellipse cx="5.508" cy="30.599" fill="#7e14ff" rx="5.508" ry="30.599" style="fill:#7e14ff;fill:color(display-p3 .4922 .0767 1);fill-opacity:1" transform="rotate(89.814 -32.644 -3.334)scale(1 -1)"/></g><g filter="url(#f)"><ellipse cx="5.508" cy="30.599" fill="#7e14ff" rx="5.508" ry="30.599" style="fill:#7e14ff;fill:color(display-p3 .4922 .0767 1);fill-opacity:1" transform="matrix(.00324 1 1 -.00324 -34.34 30.47)"/></g><g filter="url(#g)"><ellipse cx="14.072" cy="22.078" fill="#ede6ff" rx="14.072" ry="22.078" style="fill:#ede6ff;fill:color(display-p3 .9275 .9033 1);fill-opacity:1" transform="rotate(93.35 24.506 48.493)scale(-1 1)"/></g><g filter="url(#h)"><ellipse cx="3.47" cy="21.501" fill="#7e14ff" rx="3.47" ry="21.501" style="fill:#7e14ff;fill:color(display-p3 .4922 .0767 1);fill-opacity:1" transform="rotate(89.009 28.708 47.59)scale(-1 1)"/></g><g filter="url(#i)"><ellipse cx="3.47" cy="21.501" fill="#7e14ff" rx="3.47" ry="21.501" style="fill:#7e14ff;fill:color(display-p3 .4922 .0767 1);fill-opacity:1" transform="rotate(89.009 28.708 47.59)scale(-1 1)"/></g><g filter="url(#j)"><ellipse cx=".387" cy="8.972" fill="#7e14ff" rx="4.407" ry="29.108" style="fill:#7e14ff;fill:color(display-p3 .4922 .0767 1);fill-opacity:1" transform="rotate(39.51 .387 8.972)"/></g><g filter="url(#k)"><ellipse cx="47.523" cy="-6.092" fill="#7e14ff" rx="4.407" ry="29.108" style="fill:#7e14ff;fill:color(display-p3 .4922 .0767 1);fill-opacity:1" transform="rotate(37.892 47.523 -6.092)"/></g><g filter="url(#l)"><ellipse cx="41.412" cy="6.333" fill="#47bfff" rx="5.971" ry="9.665" style="fill:#47bfff;fill:color(display-p3 .2799 .748 1);fill-opacity:1" transform="rotate(37.892 41.412 6.333)"/></g><g filter="url(#m)"><ellipse cx="-1.879" cy="38.332" fill="#7e14ff" rx="4.407" ry="29.108" style="fill:#7e14ff;fill:color(display-p3 .4922 .0767 1);fill-opacity:1" transform="rotate(37.892 -1.88 38.332)"/></g><g filter="url(#n)"><ellipse cx="-1.879" cy="38.332" fill="#7e14ff" rx="4.407" ry="29.108" style="fill:#7e14ff;fill:color(display-p3 .4922 .0767 1);fill-opacity:1" transform="rotate(37.892 -1.88 38.332)"/></g><g filter="url(#o)"><ellipse cx="35.651" cy="29.907" fill="#7e14ff" rx="4.407" ry="29.108" style="fill:#7e14ff;fill:color(display-p3 .4922 .0767 1);fill-opacity:1" transform="rotate(37.892 35.651 29.907)"/></g><g filter="url(#p)"><ellipse cx="38.418" cy="32.4" fill="#47bfff" rx="5.971" ry="15.297" style="fill:#47bfff;fill:color(display-p3 .2799 .748 1);fill-opacity:1" transform="rotate(37.892 38.418 32.4)"/></g></g><defs><filter id="b" width="60.045" height="41.654" x="-19.77" y="16.149" color-interpolation-filters="sRGB" filterUnits="userSpaceOnUse"><feFlood flood-opacity="0" result="BackgroundImageFix"/><feBlend in="SourceGraphic" in2="BackgroundImageFix" result="shape"/><feGaussianBlur result="effect1_foregroundBlur_2002_17158" stdDeviation="7.659"/></filter><filter id="c" width="90.34" height="51.437" x="-54.613" y="-7.533" color-interpolation-filters="sRGB" filterUnits="userSpaceOnUse"><feFlood flood-opacity="0" result="BackgroundImageFix"/><feBlend in="SourceGraphic" in2="BackgroundImageFix" result="shape"/><feGaussianBlur result="effect1_foregroundBlur_2002_17158" stdDeviation="7.659"/></filter><filter id="d" width="79.355" height="29.4" x="-49.64" y="2.03" color-interpolation-filters="sRGB" filterUnits="userSpaceOnUse"><feFlood flood-opacity="0" result="BackgroundImageFix"/><feBlend in="SourceGraphic" in2="BackgroundImageFix" result="shape"/><feGaussianBlur result="effect1_foregroundBlur_2002_17158" stdDeviation="4.596"/></filter><filter id="e" width="79.579" height="29.4" x="-45.045" y="20.029" color-interpolation-filters="sRGB" filterUnits="userSpaceOnUse"><feFlood flood-opacity="0" result="BackgroundImageFix"/><feBlend in="SourceGraphic" in2="BackgroundImageFix" result="shape"/><feGaussianBlur result="effect1_foregroundBlur_2002_17158" stdDeviation="4.596"/></filter><filter id="f" width="79.579" height="29.4" x="-43.513" y="21.178" color-interpolation-filters="sRGB" filterUnits="userSpaceOnUse"><feFlood flood-opacity="0" result="BackgroundImageFix"/><feBlend in="SourceGraphic" in2="BackgroundImageFix" result="shape"/><feGaussianBlur result="effect1_foregroundBlur_2002_17158" stdDeviation="4.596"/></filter><filter id="g" width="74.749" height="58.852" x="15.756" y="-17.901" color-interpolation-filters="sRGB" filterUnits="userSpaceOnUse"><feFlood flood-opacity="0" result="BackgroundImageFix"/><feBlend in="SourceGraphic" in2="BackgroundImageFix" result="shape"/><feGaussianBlur result="effect1_foregroundBlur_2002_17158" stdDeviation="7.659"/></filter><filter id="h" width="61.377" height="25.362" x="23.548" y="2.284" color-interpolation-filters="sRGB" filterUnits="userSpaceOnUse"><feFlood flood-opacity="0" result="BackgroundImageFix"/><feBlend in="SourceGraphic" in2="BackgroundImageFix" result="shape"/><feGaussianBlur result="effect1_foregroundBlur_2002_17158" stdDeviation="4.596"/></filter><filter id="i" width="61.377" height="25.362" x="23.548" y="2.284" color-interpolation-filters="sRGB" filterUnits="userSpaceOnUse"><feFlood flood-opacity="0" result="BackgroundImageFix"/><feBlend in="SourceGraphic" in2="BackgroundImageFix" result="shape"/><feGaussianBlur result="effect1_foregroundBlur_2002_17158" stdDeviation="4.596"/></filter><filter id="j" width="56.045" height="63.649" x="-27.636" y="-22.853" color-interpolation-filters="sRGB" filterUnits="userSpaceOnUse"><feFlood flood-opacity="0" result="BackgroundImageFix"/><feBlend in="SourceGraphic" in2="BackgroundImageFix" result="shape"/><feGaussianBlur result="effect1_foregroundBlur_2002_17158" stdDeviation="4.596"/></filter><filter id="k" width="54.814" height="64.646" x="20.116" y="-38.415" color-interpolation-filters="sRGB" filterUnits="userSpaceOnUse"><feFlood flood-opacity="0" result="BackgroundImageFix"/><feBlend in="SourceGraphic" in2="BackgroundImageFix" result="shape"/><feGaussianBlur result="effect1_foregroundBlur_2002_17158" stdDeviation="4.596"/></filter><filter id="l" width="33.541" height="35.313" x="24.641" y="-11.323" color-interpolation-filters="sRGB" filterUnits="userSpaceOnUse"><feFlood flood-opacity="0" result="BackgroundImageFix"/><feBlend in="SourceGraphic" in2="BackgroundImageFix" result="shape"/><feGaussianBlur result="effect1_foregroundBlur_2002_17158" stdDeviation="4.596"/></filter><filter id="m" width="54.814" height="64.646" x="-29.286" y="6.009" color-interpolation-filters="sRGB" filterUnits="userSpaceOnUse"><feFlood flood-opacity="0" result="BackgroundImageFix"/><feBlend in="SourceGraphic" in2="BackgroundImageFix" result="shape"/><feGaussianBlur result="effect1_foregroundBlur_2002_17158" stdDeviation="4.596"/></filter><filter id="n" width="54.814" height="64.646" x="-29.286" y="6.009" color-interpolation-filters="sRGB" filterUnits="userSpaceOnUse"><feFlood flood-opacity="0" result="BackgroundImageFix"/><feBlend in="SourceGraphic" in2="BackgroundImageFix" result="shape"/><feGaussianBlur result="effect1_foregroundBlur_2002_17158" stdDeviation="4.596"/></filter><filter id="o" width="54.814" height="64.646" x="8.244" y="-2.416" color-interpolation-filters="sRGB" filterUnits="userSpaceOnUse"><feFlood flood-opacity="0" result="BackgroundImageFix"/><feBlend in="SourceGraphic" in2="BackgroundImageFix" result="shape"/><feGaussianBlur result="effect1_foregroundBlur_2002_17158" stdDeviation="4.596"/></filter><filter id="p" width="39.409" height="43.623" x="18.713" y="10.588" color-interpolation-filters="sRGB" filterUnits="userSpaceOnUse"><feFlood flood-opacity="0" result="BackgroundImageFix"/><feBlend in="SourceGraphic" in2="BackgroundImageFix" result="shape"/><feGaussianBlur result="effect1_foregroundBlur_2002_17158" stdDeviation="4.596"/></filter></defs></svg>
+</file>
+
+<file path="public/icons.svg">
+<svg xmlns="http://www.w3.org/2000/svg">
+  <symbol id="bluesky-icon" viewBox="0 0 16 17">
+    <g clip-path="url(#bluesky-clip)"><path fill="#08060d" d="M7.75 7.735c-.693-1.348-2.58-3.86-4.334-5.097-1.68-1.187-2.32-.981-2.74-.79C.188 2.065.1 2.812.1 3.251s.241 3.602.398 4.13c.52 1.744 2.367 2.333 4.07 2.145-2.495.37-4.71 1.278-1.805 4.512 3.196 3.309 4.38-.71 4.987-2.746.608 2.036 1.307 5.91 4.93 2.746 2.72-2.746.747-4.143-1.747-4.512 1.702.189 3.55-.4 4.07-2.145.156-.528.397-3.691.397-4.13s-.088-1.186-.575-1.406c-.42-.19-1.06-.395-2.741.79-1.755 1.24-3.64 3.752-4.334 5.099"/></g>
+    <defs><clipPath id="bluesky-clip"><path fill="#fff" d="M.1.85h15.3v15.3H.1z"/></clipPath></defs>
+  </symbol>
+  <symbol id="discord-icon" viewBox="0 0 20 19">
+    <path fill="#08060d" d="M16.224 3.768a14.5 14.5 0 0 0-3.67-1.153c-.158.286-.343.67-.47.976a13.5 13.5 0 0 0-4.067 0c-.128-.306-.317-.69-.476-.976A14.4 14.4 0 0 0 3.868 3.77C1.546 7.28.916 10.703 1.231 14.077a14.7 14.7 0 0 0 4.5 2.306q.545-.748.965-1.587a9.5 9.5 0 0 1-1.518-.74q.191-.14.372-.293c2.927 1.369 6.107 1.369 8.999 0q.183.152.372.294-.723.437-1.52.74.418.838.963 1.588a14.6 14.6 0 0 0 4.504-2.308c.37-3.911-.63-7.302-2.644-10.309m-9.13 8.234c-.878 0-1.599-.82-1.599-1.82 0-.998.705-1.82 1.6-1.82.894 0 1.614.82 1.599 1.82.001 1-.705 1.82-1.6 1.82m5.91 0c-.878 0-1.599-.82-1.599-1.82 0-.998.705-1.82 1.6-1.82.893 0 1.614.82 1.599 1.82 0 1-.706 1.82-1.6 1.82"/>
+  </symbol>
+  <symbol id="documentation-icon" viewBox="0 0 21 20">
+    <path fill="none" stroke="#aa3bff" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.35" d="m15.5 13.333 1.533 1.322c.645.555.967.833.967 1.178s-.322.623-.967 1.179L15.5 18.333m-3.333-5-1.534 1.322c-.644.555-.966.833-.966 1.178s.322.623.966 1.179l1.534 1.321"/>
+    <path fill="none" stroke="#aa3bff" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.35" d="M17.167 10.836v-4.32c0-1.41 0-2.117-.224-2.68-.359-.906-1.118-1.621-2.08-1.96-.599-.21-1.349-.21-2.848-.21-2.623 0-3.935 0-4.983.369-1.684.591-3.013 1.842-3.641 3.428C3 6.449 3 7.684 3 10.154v2.122c0 2.558 0 3.838.706 4.726q.306.383.713.671c.76.536 1.79.64 3.581.66"/>
+    <path fill="none" stroke="#aa3bff" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.35" d="M3 10a2.78 2.78 0 0 1 2.778-2.778c.555 0 1.209.097 1.748-.047.48-.129.854-.503.982-.982.145-.54.048-1.194.048-1.749a2.78 2.78 0 0 1 2.777-2.777"/>
+  </symbol>
+  <symbol id="github-icon" viewBox="0 0 19 19">
+    <path fill="#08060d" fill-rule="evenodd" d="M9.356 1.85C5.05 1.85 1.57 5.356 1.57 9.694a7.84 7.84 0 0 0 5.324 7.44c.387.079.528-.168.528-.376 0-.182-.013-.805-.013-1.454-2.165.467-2.616-.935-2.616-.935-.349-.91-.864-1.143-.864-1.143-.71-.48.051-.48.051-.48.787.051 1.2.805 1.2.805.695 1.194 1.817.857 2.268.649.064-.507.27-.857.49-1.052-1.728-.182-3.545-.857-3.545-3.87 0-.857.31-1.558.8-2.104-.078-.195-.349-1 .077-2.078 0 0 .657-.208 2.14.805a7.5 7.5 0 0 1 1.946-.26c.657 0 1.328.092 1.946.26 1.483-1.013 2.14-.805 2.14-.805.426 1.078.155 1.883.078 2.078.502.546.799 1.247.799 2.104 0 3.013-1.818 3.675-3.558 3.87.284.247.528.714.528 1.454 0 1.052-.012 1.896-.012 2.156 0 .208.142.455.528.377a7.84 7.84 0 0 0 5.324-7.441c.013-4.338-3.48-7.844-7.773-7.844" clip-rule="evenodd"/>
+  </symbol>
+  <symbol id="social-icon" viewBox="0 0 20 20">
+    <path fill="none" stroke="#aa3bff" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.35" d="M12.5 6.667a4.167 4.167 0 1 0-8.334 0 4.167 4.167 0 0 0 8.334 0"/>
+    <path fill="none" stroke="#aa3bff" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.35" d="M2.5 16.667a5.833 5.833 0 0 1 8.75-5.053m3.837.474.513 1.035c.07.144.257.282.414.309l.93.155c.596.1.736.536.307.965l-.723.73a.64.64 0 0 0-.152.531l.207.903c.164.715-.213.991-.84.618l-.872-.52a.63.63 0 0 0-.577 0l-.872.52c-.624.373-1.003.094-.84-.618l.207-.903a.64.64 0 0 0-.152-.532l-.723-.729c-.426-.43-.289-.864.306-.964l.93-.156a.64.64 0 0 0 .412-.31l.513-1.034c.28-.562.735-.562 1.012 0"/>
+  </symbol>
+  <symbol id="x-icon" viewBox="0 0 19 19">
+    <path fill="#08060d" fill-rule="evenodd" d="M1.893 1.98c.052.072 1.245 1.769 2.653 3.77l2.892 4.114c.183.261.333.48.333.486s-.068.089-.152.183l-.522.593-.765.867-3.597 4.087c-.375.426-.734.834-.798.905a1 1 0 0 0-.118.148c0 .01.236.017.664.017h.663l.729-.83c.4-.457.796-.906.879-.999a692 692 0 0 0 1.794-2.038c.034-.037.301-.34.594-.675l.551-.624.345-.392a7 7 0 0 1 .34-.374c.006 0 .93 1.306 2.052 2.903l2.084 2.965.045.063h2.275c1.87 0 2.273-.003 2.266-.021-.008-.02-1.098-1.572-3.894-5.547-2.013-2.862-2.28-3.246-2.273-3.266.008-.019.282-.332 2.085-2.38l2-2.274 1.567-1.782c.022-.028-.016-.03-.65-.03h-.674l-.3.342a871 871 0 0 1-1.782 2.025c-.067.075-.405.458-.75.852a100 100 0 0 1-.803.91c-.148.172-.299.344-.99 1.127-.304.343-.32.358-.345.327-.015-.019-.904-1.282-1.976-2.808L6.365 1.85H1.8zm1.782.91 8.078 11.294c.772 1.08 1.413 1.973 1.425 1.984.016.017.241.02 1.05.017l1.03-.004-2.694-3.766L7.796 5.75 5.722 2.852l-1.039-.004-1.039-.004z" clip-rule="evenodd"/>
+  </symbol>
+</svg>
+</file>
+
+<file path="src/assets/react.svg">
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" aria-hidden="true" role="img" class="iconify iconify--logos" width="35.93" height="32" preserveAspectRatio="xMidYMid meet" viewBox="0 0 256 228"><path fill="#00D8FF" d="M210.483 73.824a171.49 171.49 0 0 0-8.24-2.597c.465-1.9.893-3.777 1.273-5.621c6.238-30.281 2.16-54.676-11.769-62.708c-13.355-7.7-35.196.329-57.254 19.526a171.23 171.23 0 0 0-6.375 5.848a155.866 155.866 0 0 0-4.241-3.917C100.759 3.829 77.587-4.822 63.673 3.233C50.33 10.957 46.379 33.89 51.995 62.588a170.974 170.974 0 0 0 1.892 8.48c-3.28.932-6.445 1.924-9.474 2.98C17.309 83.498 0 98.307 0 113.668c0 15.865 18.582 31.778 46.812 41.427a145.52 145.52 0 0 0 6.921 2.165a167.467 167.467 0 0 0-2.01 9.138c-5.354 28.2-1.173 50.591 12.134 58.266c13.744 7.926 36.812-.22 59.273-19.855a145.567 145.567 0 0 0 5.342-4.923a168.064 168.064 0 0 0 6.92 6.314c21.758 18.722 43.246 26.282 56.54 18.586c13.731-7.949 18.194-32.003 12.4-61.268a145.016 145.016 0 0 0-1.535-6.842c1.62-.48 3.21-.974 4.76-1.488c29.348-9.723 48.443-25.443 48.443-41.52c0-15.417-17.868-30.326-45.517-39.844Zm-6.365 70.984c-1.4.463-2.836.91-4.3 1.345c-3.24-10.257-7.612-21.163-12.963-32.432c5.106-11 9.31-21.767 12.459-31.957c2.619.758 5.16 1.557 7.61 2.4c23.69 8.156 38.14 20.213 38.14 29.504c0 9.896-15.606 22.743-40.946 31.14Zm-10.514 20.834c2.562 12.94 2.927 24.64 1.23 33.787c-1.524 8.219-4.59 13.698-8.382 15.893c-8.067 4.67-25.32-1.4-43.927-17.412a156.726 156.726 0 0 1-6.437-5.87c7.214-7.889 14.423-17.06 21.459-27.246c12.376-1.098 24.068-2.894 34.671-5.345a134.17 134.17 0 0 1 1.386 6.193ZM87.276 214.515c-7.882 2.783-14.16 2.863-17.955.675c-8.075-4.657-11.432-22.636-6.853-46.752a156.923 156.923 0 0 1 1.869-8.499c10.486 2.32 22.093 3.988 34.498 4.994c7.084 9.967 14.501 19.128 21.976 27.15a134.668 134.668 0 0 1-4.877 4.492c-9.933 8.682-19.886 14.842-28.658 17.94ZM50.35 144.747c-12.483-4.267-22.792-9.812-29.858-15.863c-6.35-5.437-9.555-10.836-9.555-15.216c0-9.322 13.897-21.212 37.076-29.293c2.813-.98 5.757-1.905 8.812-2.773c3.204 10.42 7.406 21.315 12.477 32.332c-5.137 11.18-9.399 22.249-12.634 32.792a134.718 134.718 0 0 1-6.318-1.979Zm12.378-84.26c-4.811-24.587-1.616-43.134 6.425-47.789c8.564-4.958 27.502 2.111 47.463 19.835a144.318 144.318 0 0 1 3.841 3.545c-7.438 7.987-14.787 17.08-21.808 26.988c-12.04 1.116-23.565 2.908-34.161 5.309a160.342 160.342 0 0 1-1.76-7.887Zm110.427 27.268a347.8 347.8 0 0 0-7.785-12.803c8.168 1.033 15.994 2.404 23.343 4.08c-2.206 7.072-4.956 14.465-8.193 22.045a381.151 381.151 0 0 0-7.365-13.322Zm-45.032-43.861c5.044 5.465 10.096 11.566 15.065 18.186a322.04 322.04 0 0 0-30.257-.006c4.974-6.559 10.069-12.652 15.192-18.18ZM82.802 87.83a323.167 323.167 0 0 0-7.227 13.238c-3.184-7.553-5.909-14.98-8.134-22.152c7.304-1.634 15.093-2.97 23.209-3.984a321.524 321.524 0 0 0-7.848 12.897Zm8.081 65.352c-8.385-.936-16.291-2.203-23.593-3.793c2.26-7.3 5.045-14.885 8.298-22.6a321.187 321.187 0 0 0 7.257 13.246c2.594 4.48 5.28 8.868 8.038 13.147Zm37.542 31.03c-5.184-5.592-10.354-11.779-15.403-18.433c4.902.192 9.899.29 14.978.29c5.218 0 10.376-.117 15.453-.343c-4.985 6.774-10.018 12.97-15.028 18.486Zm52.198-57.817c3.422 7.8 6.306 15.345 8.596 22.52c-7.422 1.694-15.436 3.058-23.88 4.071a382.417 382.417 0 0 0 7.859-13.026a347.403 347.403 0 0 0 7.425-13.565Zm-16.898 8.101a358.557 358.557 0 0 1-12.281 19.815a329.4 329.4 0 0 1-23.444.823c-7.967 0-15.716-.248-23.178-.732a310.202 310.202 0 0 1-12.513-19.846h.001a307.41 307.41 0 0 1-10.923-20.627a310.278 310.278 0 0 1 10.89-20.637l-.001.001a307.318 307.318 0 0 1 12.413-19.761c7.613-.576 15.42-.876 23.31-.876H128c7.926 0 15.743.303 23.354.883a329.357 329.357 0 0 1 12.335 19.695a358.489 358.489 0 0 1 11.036 20.54a329.472 329.472 0 0 1-11 20.722Zm22.56-122.124c8.572 4.944 11.906 24.881 6.52 51.026c-.344 1.668-.73 3.367-1.15 5.09c-10.622-2.452-22.155-4.275-34.23-5.408c-7.034-10.017-14.323-19.124-21.64-27.008a160.789 160.789 0 0 1 5.888-5.4c18.9-16.447 36.564-22.941 44.612-18.3ZM128 90.808c12.625 0 22.86 10.235 22.86 22.86s-10.235 22.86-22.86 22.86s-22.86-10.235-22.86-22.86s10.235-22.86 22.86-22.86Z"></path></svg>
+</file>
+
+<file path="src/assets/vite.svg">
+<svg xmlns="http://www.w3.org/2000/svg" width="77" height="47" fill="none" aria-labelledby="vite-logo-title" viewBox="0 0 77 47"><title id="vite-logo-title">Vite</title><style>.parenthesis{fill:#000}@media (prefers-color-scheme:dark){.parenthesis{fill:#fff}}</style><path fill="#9135ff" d="M40.151 45.71c-.663.844-2.02.374-2.02-.699V34.708a2.26 2.26 0 0 0-2.262-2.262H24.493c-.92 0-1.457-1.04-.92-1.788l7.479-10.471c1.07-1.498 0-3.578-1.842-3.578H15.443c-.92 0-1.456-1.04-.92-1.788l9.696-13.576c.213-.297.556-.474.92-.474h28.894c.92 0 1.456 1.04.92 1.788l-7.48 10.472c-1.07 1.497 0 3.578 1.842 3.578h11.376c.944 0 1.474 1.087.89 1.83L40.153 45.712z"/><mask id="a" width="48" height="47" x="14" y="0" maskUnits="userSpaceOnUse" style="mask-type:alpha"><path fill="#000" d="M40.047 45.71c-.663.843-2.02.374-2.02-.699V34.708a2.26 2.26 0 0 0-2.262-2.262H24.389c-.92 0-1.457-1.04-.92-1.788l7.479-10.472c1.07-1.497 0-3.578-1.842-3.578H15.34c-.92 0-1.456-1.04-.92-1.788l9.696-13.575c.213-.297.556-.474.92-.474H53.93c.92 0 1.456 1.04.92 1.788L47.37 13.03c-1.07 1.498 0 3.578 1.842 3.578h11.376c.944 0 1.474 1.088.89 1.831L40.049 45.712z"/></mask><g mask="url(#a)"><g filter="url(#b)"><ellipse cx="5.508" cy="14.704" fill="#eee6ff" rx="5.508" ry="14.704" transform="rotate(269.814 20.96 11.29)scale(-1 1)"/></g><g filter="url(#c)"><ellipse cx="10.399" cy="29.851" fill="#eee6ff" rx="10.399" ry="29.851" transform="rotate(89.814 -16.902 -8.275)scale(1 -1)"/></g><g filter="url(#d)"><ellipse cx="5.508" cy="30.487" fill="#8900ff" rx="5.508" ry="30.487" transform="rotate(89.814 -19.197 -7.127)scale(1 -1)"/></g><g filter="url(#e)"><ellipse cx="5.508" cy="30.599" fill="#8900ff" rx="5.508" ry="30.599" transform="rotate(89.814 -25.928 4.177)scale(1 -1)"/></g><g filter="url(#f)"><ellipse cx="5.508" cy="30.599" fill="#8900ff" rx="5.508" ry="30.599" transform="rotate(89.814 -25.738 5.52)scale(1 -1)"/></g><g filter="url(#g)"><ellipse cx="14.072" cy="22.078" fill="#eee6ff" rx="14.072" ry="22.078" transform="rotate(93.35 31.245 55.578)scale(-1 1)"/></g><g filter="url(#h)"><ellipse cx="3.47" cy="21.501" fill="#8900ff" rx="3.47" ry="21.501" transform="rotate(89.009 35.419 55.202)scale(-1 1)"/></g><g filter="url(#i)"><ellipse cx="3.47" cy="21.501" fill="#8900ff" rx="3.47" ry="21.501" transform="rotate(89.009 35.419 55.202)scale(-1 1)"/></g><g filter="url(#j)"><ellipse cx="14.592" cy="9.743" fill="#8900ff" rx="4.407" ry="29.108" transform="rotate(39.51 14.592 9.743)"/></g><g filter="url(#k)"><ellipse cx="61.728" cy="-5.321" fill="#8900ff" rx="4.407" ry="29.108" transform="rotate(37.892 61.728 -5.32)"/></g><g filter="url(#l)"><ellipse cx="55.618" cy="7.104" fill="#00c2ff" rx="5.971" ry="9.665" transform="rotate(37.892 55.618 7.104)"/></g><g filter="url(#m)"><ellipse cx="12.326" cy="39.103" fill="#8900ff" rx="4.407" ry="29.108" transform="rotate(37.892 12.326 39.103)"/></g><g filter="url(#n)"><ellipse cx="12.326" cy="39.103" fill="#8900ff" rx="4.407" ry="29.108" transform="rotate(37.892 12.326 39.103)"/></g><g filter="url(#o)"><ellipse cx="49.857" cy="30.678" fill="#8900ff" rx="4.407" ry="29.108" transform="rotate(37.892 49.857 30.678)"/></g><g filter="url(#p)"><ellipse cx="52.623" cy="33.171" fill="#00c2ff" rx="5.971" ry="15.297" transform="rotate(37.892 52.623 33.17)"/></g></g><path d="M6.919 0c-9.198 13.166-9.252 33.575 0 46.789h6.215c-9.25-13.214-9.196-33.623 0-46.789zm62.424 0h-6.215c9.198 13.166 9.252 33.575 0 46.789h6.215c9.25-13.214 9.196-33.623 0-46.789" class="parenthesis"/><defs><filter id="b" width="60.045" height="41.654" x="-5.564" y="16.92" color-interpolation-filters="sRGB" filterUnits="userSpaceOnUse"><feFlood flood-opacity="0" result="BackgroundImageFix"/><feBlend in="SourceGraphic" in2="BackgroundImageFix" result="shape"/><feGaussianBlur result="effect1_foregroundBlur_2002_17286" stdDeviation="7.659"/></filter><filter id="c" width="90.34" height="51.437" x="-40.407" y="-6.762" color-interpolation-filters="sRGB" filterUnits="userSpaceOnUse"><feFlood flood-opacity="0" result="BackgroundImageFix"/><feBlend in="SourceGraphic" in2="BackgroundImageFix" result="shape"/><feGaussianBlur result="effect1_foregroundBlur_2002_17286" stdDeviation="7.659"/></filter><filter id="d" width="79.355" height="29.4" x="-35.435" y="2.801" color-interpolation-filters="sRGB" filterUnits="userSpaceOnUse"><feFlood flood-opacity="0" result="BackgroundImageFix"/><feBlend in="SourceGraphic" in2="BackgroundImageFix" result="shape"/><feGaussianBlur result="effect1_foregroundBlur_2002_17286" stdDeviation="4.596"/></filter><filter id="e" width="79.579" height="29.4" x="-30.84" y="20.8" color-interpolation-filters="sRGB" filterUnits="userSpaceOnUse"><feFlood flood-opacity="0" result="BackgroundImageFix"/><feBlend in="SourceGraphic" in2="BackgroundImageFix" result="shape"/><feGaussianBlur result="effect1_foregroundBlur_2002_17286" stdDeviation="4.596"/></filter><filter id="f" width="79.579" height="29.4" x="-29.307" y="21.949" color-interpolation-filters="sRGB" filterUnits="userSpaceOnUse"><feFlood flood-opacity="0" result="BackgroundImageFix"/><feBlend in="SourceGraphic" in2="BackgroundImageFix" result="shape"/><feGaussianBlur result="effect1_foregroundBlur_2002_17286" stdDeviation="4.596"/></filter><filter id="g" width="74.749" height="58.852" x="29.961" y="-17.13" color-interpolation-filters="sRGB" filterUnits="userSpaceOnUse"><feFlood flood-opacity="0" result="BackgroundImageFix"/><feBlend in="SourceGraphic" in2="BackgroundImageFix" result="shape"/><feGaussianBlur result="effect1_foregroundBlur_2002_17286" stdDeviation="7.659"/></filter><filter id="h" width="61.377" height="25.362" x="37.754" y="3.055" color-interpolation-filters="sRGB" filterUnits="userSpaceOnUse"><feFlood flood-opacity="0" result="BackgroundImageFix"/><feBlend in="SourceGraphic" in2="BackgroundImageFix" result="shape"/><feGaussianBlur result="effect1_foregroundBlur_2002_17286" stdDeviation="4.596"/></filter><filter id="i" width="61.377" height="25.362" x="37.754" y="3.055" color-interpolation-filters="sRGB" filterUnits="userSpaceOnUse"><feFlood flood-opacity="0" result="BackgroundImageFix"/><feBlend in="SourceGraphic" in2="BackgroundImageFix" result="shape"/><feGaussianBlur result="effect1_foregroundBlur_2002_17286" stdDeviation="4.596"/></filter><filter id="j" width="56.045" height="63.649" x="-13.43" y="-22.082" color-interpolation-filters="sRGB" filterUnits="userSpaceOnUse"><feFlood flood-opacity="0" result="BackgroundImageFix"/><feBlend in="SourceGraphic" in2="BackgroundImageFix" result="shape"/><feGaussianBlur result="effect1_foregroundBlur_2002_17286" stdDeviation="4.596"/></filter><filter id="k" width="54.814" height="64.646" x="34.321" y="-37.644" color-interpolation-filters="sRGB" filterUnits="userSpaceOnUse"><feFlood flood-opacity="0" result="BackgroundImageFix"/><feBlend in="SourceGraphic" in2="BackgroundImageFix" result="shape"/><feGaussianBlur result="effect1_foregroundBlur_2002_17286" stdDeviation="4.596"/></filter><filter id="l" width="33.541" height="35.313" x="38.847" y="-10.552" color-interpolation-filters="sRGB" filterUnits="userSpaceOnUse"><feFlood flood-opacity="0" result="BackgroundImageFix"/><feBlend in="SourceGraphic" in2="BackgroundImageFix" result="shape"/><feGaussianBlur result="effect1_foregroundBlur_2002_17286" stdDeviation="4.596"/></filter><filter id="m" width="54.814" height="64.646" x="-15.081" y="6.78" color-interpolation-filters="sRGB" filterUnits="userSpaceOnUse"><feFlood flood-opacity="0" result="BackgroundImageFix"/><feBlend in="SourceGraphic" in2="BackgroundImageFix" result="shape"/><feGaussianBlur result="effect1_foregroundBlur_2002_17286" stdDeviation="4.596"/></filter><filter id="n" width="54.814" height="64.646" x="-15.081" y="6.78" color-interpolation-filters="sRGB" filterUnits="userSpaceOnUse"><feFlood flood-opacity="0" result="BackgroundImageFix"/><feBlend in="SourceGraphic" in2="BackgroundImageFix" result="shape"/><feGaussianBlur result="effect1_foregroundBlur_2002_17286" stdDeviation="4.596"/></filter><filter id="o" width="54.814" height="64.646" x="22.45" y="-1.645" color-interpolation-filters="sRGB" filterUnits="userSpaceOnUse"><feFlood flood-opacity="0" result="BackgroundImageFix"/><feBlend in="SourceGraphic" in2="BackgroundImageFix" result="shape"/><feGaussianBlur result="effect1_foregroundBlur_2002_17286" stdDeviation="4.596"/></filter><filter id="p" width="39.409" height="43.623" x="32.919" y="11.36" color-interpolation-filters="sRGB" filterUnits="userSpaceOnUse"><feFlood flood-opacity="0" result="BackgroundImageFix"/><feBlend in="SourceGraphic" in2="BackgroundImageFix" result="shape"/><feGaussianBlur result="effect1_foregroundBlur_2002_17286" stdDeviation="4.596"/></filter></defs></svg>
+</file>
+
+<file path="src/context/AuthContext.tsx">
+import React, { createContext, useContext, useState, useEffect } from 'react';
+import type { User } from '../types';
+import { db } from '../db/kibandaDB';
+
+interface AuthContextType {
+  currentUser: User | null;
+  loginWithPin: (pin: string) => Promise<boolean>;
+  logout: () => void;
+}
+
+const AuthContext = createContext<AuthContextType | undefined>(undefined);
+
+export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  const [currentUser, setCurrentUser] = useState<User | null>(() => {
+    const saved = localStorage.getItem('garomax_active_user');
+    return saved ? JSON.parse(saved) : null;
+  });
+
+  useEffect(() => {
+    if (currentUser) {
+      localStorage.setItem('garomax_active_user', JSON.stringify(currentUser));
+    } else {
+      localStorage.removeItem('garomax_active_user');
+    }
+  }, [currentUser]);
+
+  const loginWithPin = async (pin: string): Promise<boolean> => {
+    const user = await db.users.where('pin_code').equals(pin).first();
+    if (user) {
+      setCurrentUser(user);
+      return true;
+    }
+    return false;
+  };
+
+  const logout = () => {
+    setCurrentUser(null);
+  };
+
+  return (
+    <AuthContext.Provider value={{ currentUser, loginWithPin, logout }}>
+      {children}
+    </AuthContext.Provider>
+  );
+};
+
+export const useAuth = () => {
+  const context = useContext(AuthContext);
+  if (!context) throw new Error('useAuth must be used within an AuthProvider');
+  return context;
+};
+</file>
+
+<file path="src/db/kibandaDB.ts">
+import Dexie, { type Table } from 'dexie';
+import type { User, Ingredient, RecipeItem, Order, WasteLog, StaffLedger } from '../types';
+
+export class KibandaDatabase extends Dexie {
+  users!: Table<User>;
+  ingredients!: Table<Ingredient>;
+  recipes!: Table<RecipeItem>;
+  orders!: Table<Order>;
+  wasteLogs!: Table<WasteLog>;
+  staffLedgers!: Table<StaffLedger>;
+
+  constructor() {
+    super('GaromaxBitesDB');
+    
+    this.version(1).stores({
+      users: 'user_id, pin_code, role',
+      ingredients: 'ingredient_id, name',
+      recipes: '[dish_name+ingredient_id], dish_name, ingredient_id',
+      orders: 'order_id, payment_status, placed_by_waiter_id, timestamp, synced',
+      wasteLogs: 'waste_id, logged_by_cook_id, timestamp, synced',
+      staffLedgers: 'ledger_id, staff_id, date, synced'
+    });
+
+    // v2: kitchen prep status is now tracked separately from payment status,
+    // so "mark prepared" in the kitchen no longer closes the waiter's bill.
+    this.version(2).stores({
+      orders: 'order_id, payment_status, kitchen_status, placed_by_waiter_id, timestamp, synced',
+    }).upgrade(async (tx) => {
+      await tx.table('orders').toCollection().modify((order) => {
+        if (!order.kitchen_status) {
+          // Best-effort backfill: orders already marked paid under the old
+          // logic were also implicitly "prepared", so treat them as ready.
+          order.kitchen_status = order.payment_status === 'active' ? 'queued' : 'ready';
+        }
+      });
+    });
+  }
+}
+
+export const db = new KibandaDatabase();
+</file>
+
+<file path="src/db/seedLocalData.ts">
+import { db } from './kibandaDB';
+
+export async function seedInitialData() {
+  const userCount = await db.users.count();
+  if (userCount === 0) {
+    // Seed default staff
+    await db.users.bulkAdd([
+      { user_id: '1', name: 'Garomax Owner', role: 'admin', pin_code: '0000', active_shift: true },
+      { user_id: '2', name: 'Chef James', role: 'cook', pin_code: '1111', active_shift: true },
+      { user_id: '3', name: 'Waitstaff Mary', role: 'waiter', pin_code: '2222', active_shift: true },
+    ]);
+
+    // Seed default ingredients
+    await db.ingredients.bulkAdd([
+      { ingredient_id: 'i1', name: 'Unga (Maize Flour)', unit: 'kg', quantity_on_hand: 25, last_purchase_cost: 150, low_stock_threshold: 5 },
+      { ingredient_id: 'i2', name: 'Potatoes (Viazi)', unit: 'kg', quantity_on_hand: 40, last_purchase_cost: 100, low_stock_threshold: 10 },
+      { ingredient_id: 'i3', name: 'Cooking Oil', unit: 'l', quantity_on_hand: 15, last_purchase_cost: 250, low_stock_threshold: 3 },
+    ]);
+
+    // Seed default recipes
+    await db.recipes.bulkAdd([
+      { dish_name: 'Ugali', selling_price: 50, ingredient_id: 'i1', quantity_per_plate: 0.2 },
+      { dish_name: 'Chips', selling_price: 120, ingredient_id: 'i2', quantity_per_plate: 0.3 },
+      { dish_name: 'Chips', selling_price: 120, ingredient_id: 'i3', quantity_per_plate: 0.05 },
+    ]);
+
+    console.log('Garomax Bites local IndexedDB seeded!');
+  }
+}
+</file>
+
+<file path="src/pages/AdminDashboard.tsx">
+import React, { useMemo, useState } from 'react';
+import { useLiveQuery } from 'dexie-react-hooks';
+import { db } from '../db/kibandaDB';
+import { requestSync, deleteUserRemote } from '../db/sync';
+import { useAuth } from '../context/AuthContext';
+import { StockMenuManager } from './StockMenuManager';
+import type { StaffLedger, UserRole } from '../types';
+import {
+  ClipboardList,
+  Users,
+  AlertTriangle,
+  CheckCircle2,
+  XCircle,
+  Plus,
+  X,
+  TrendingUp,
+  Receipt,
+  Wallet,
+  Package,
+  UserPlus,
+  ShieldAlert,
+  Trash2,
+} from 'lucide-react';
+
+const money = (n: number) => `KES ${n.toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
+const isToday = (iso: string) => new Date(iso).toDateString() === new Date().toDateString();
+
+export const AdminDashboard: React.FC = () => {
+  const { currentUser } = useAuth();
+  const staff = useLiveQuery(() => db.users.toArray(), []);
+  const orders = useLiveQuery(() => db.orders.toArray(), []);
+  const ingredients = useLiveQuery(() => db.ingredients.toArray(), []);
+  const ledgers = useLiveQuery(
+    () => db.staffLedgers.orderBy('date').reverse().toArray(),
+    []
+  );
+
+  const staffMap = new Map((staff ?? []).map((s) => [s.user_id, s]));
+
+  // ---------------------------------------------------------------------
+  // Sales overview — today's paid orders, items sold, payment split, risk
+  // ---------------------------------------------------------------------
+  const sales = useMemo(() => {
+    const all = orders ?? [];
+    const paidToday = all.filter((o) => o.payment_status === 'paid' && isToday(o.timestamp));
+
+    const revenue = paidToday.reduce((sum, o) => sum + o.total_amount, 0);
+    const orderCount = paidToday.length;
+    const avgTicket = orderCount > 0 ? revenue / orderCount : 0;
+
+    const paymentSplit: Record<string, number> = { cash: 0, mpesa: 0, credit: 0 };
+    paidToday.forEach((o) => {
+      if (o.payment_method) paymentSplit[o.payment_method] = (paymentSplit[o.payment_method] ?? 0) + o.total_amount;
+    });
+
+    const itemMap = new Map<string, { quantity: number; revenue: number }>();
+    paidToday.forEach((o) => {
+      o.items.forEach((it) => {
+        const entry = itemMap.get(it.dish_name) ?? { quantity: 0, revenue: 0 };
+        entry.quantity += it.quantity;
+        entry.revenue += it.unit_price * it.quantity;
+        itemMap.set(it.dish_name, entry);
+      });
+    });
+    const itemsSold = Array.from(itemMap.entries())
+      .map(([dish_name, v]) => ({ dish_name, ...v }))
+      .sort((a, b) => b.quantity - a.quantity);
+
+    const unsettled = all.filter((o) => o.payment_status === 'active');
+    const unsettledValue = unsettled.reduce((sum, o) => sum + o.total_amount, 0);
+    const credit = all.filter((o) => o.payment_status === 'credit');
+    const creditValue = credit.reduce((sum, o) => sum + o.total_amount, 0);
+    const loss = all.filter((o) => o.payment_status === 'unpaid_loss');
+    const lossValue = loss.reduce((sum, o) => sum + o.total_amount, 0);
+
+    return { revenue, orderCount, avgTicket, paymentSplit, itemsSold, unsettledValue, unsettledCount: unsettled.length, creditValue, lossValue };
+  }, [orders]);
+
+  // ---------------------------------------------------------------------
+  // Stock overview
+  // ---------------------------------------------------------------------
+  const stock = useMemo(() => {
+    const list = ingredients ?? [];
+    const lowStock = list.filter((i) => i.quantity_on_hand <= i.low_stock_threshold);
+    const stockValue = list.reduce((sum, i) => sum + i.quantity_on_hand * i.last_purchase_cost, 0);
+    return { list, lowStock, stockValue };
+  }, [ingredients]);
+
+  // ---------------------------------------------------------------------
+  // Staff management — create accounts, set PINs, toggle shift status
+  // ---------------------------------------------------------------------
+  const [showStaffForm, setShowStaffForm] = useState(false);
+  const [newName, setNewName] = useState('');
+  const [newRole, setNewRole] = useState<UserRole>('waiter');
+  const [newPin, setNewPin] = useState('');
+  const [staffError, setStaffError] = useState('');
+
+  const resetStaffForm = () => {
+    setNewName('');
+    setNewRole('waiter');
+    setNewPin('');
+    setStaffError('');
+  };
+
+  const handleCreateStaff = async () => {
+    setStaffError('');
+    if (!newName.trim()) {
+      setStaffError('Enter a name.');
+      return;
+    }
+    if (!/^\d{4}$/.test(newPin)) {
+      setStaffError('PIN must be exactly 4 digits.');
+      return;
+    }
+    const pinTaken = (staff ?? []).some((s) => s.pin_code === newPin);
+    if (pinTaken) {
+      setStaffError('That PIN is already in use — pick a different one.');
+      return;
+    }
+
+    await db.users.add({
+      user_id: crypto.randomUUID(),
+      name: newName.trim(),
+      role: newRole,
+      pin_code: newPin,
+      active_shift: true,
+    });
+    requestSync();
+    resetStaffForm();
+    setShowStaffForm(false);
+  };
+
+  const toggleActiveShift = async (userId: string, current: boolean) => {
+    await db.users.update(userId, { active_shift: !current });
+    requestSync();
+  };
+
+  const [confirmDeleteStaff, setConfirmDeleteStaff] = useState<string | null>(null);
+
+  const handleDeleteStaff = async (userId: string) => {
+    const target = (staff ?? []).find((s) => s.user_id === userId);
+    if (!target) return;
+
+    if (currentUser?.user_id === userId) {
+      setConfirmDeleteStaff(null);
+      return; // guarded in the UI already, but double-check before any write
+    }
+    const adminCount = (staff ?? []).filter((s) => s.role === 'admin').length;
+    if (target.role === 'admin' && adminCount <= 1) {
+      setConfirmDeleteStaff(null);
+      return; // must always keep at least one admin account
+    }
+
+    await db.users.delete(userId);
+    deleteUserRemote(userId);
+    setConfirmDeleteStaff(null);
+  };
+
+  // ---------------------------------------------------------------------
+  // Payroll ledger (existing) — now a secondary section
+  // ---------------------------------------------------------------------
+  const [showLedgerForm, setShowLedgerForm] = useState(false);
+  const [formStaffId, setFormStaffId] = useState('');
+  const [formShortage, setFormShortage] = useState('');
+  const [formSpoilage, setFormSpoilage] = useState('');
+  const [formReason, setFormReason] = useState('');
+  const [filter, setFilter] = useState<'all' | StaffLedger['payroll_deduction_status']>('all');
+
+  const filteredLedgers = (ledgers ?? []).filter(
+    (l) => filter === 'all' || l.payroll_deduction_status === filter
+  );
+
+  const ledgerTotals = (ledgers ?? []).reduce(
+    (acc, l) => {
+      const amount = l.shortage_amount + l.spoilage_cost;
+      if (l.payroll_deduction_status === 'pending') acc.pending += amount;
+      if (l.payroll_deduction_status === 'deducted') acc.deducted += amount;
+      if (l.payroll_deduction_status === 'waived') acc.waived += amount;
+      return acc;
+    },
+    { pending: 0, deducted: 0, waived: 0 }
+  );
+
+  const resetLedgerForm = () => {
+    setFormStaffId('');
+    setFormShortage('');
+    setFormSpoilage('');
+    setFormReason('');
+  };
+
+  const handleAddLedgerEntry = async () => {
+    if (!formStaffId || !formReason.trim()) return;
+    const shortage = parseFloat(formShortage) || 0;
+    const spoilage = parseFloat(formSpoilage) || 0;
+    if (shortage === 0 && spoilage === 0) return;
+
+    const entry: StaffLedger = {
+      ledger_id: crypto.randomUUID(),
+      staff_id: formStaffId,
+      date: new Date().toISOString(),
+      shortage_amount: shortage,
+      spoilage_cost: spoilage,
+      reason: formReason.trim(),
+      payroll_deduction_status: 'pending',
+      synced: false,
+    };
+
+    await db.staffLedgers.add(entry);
+    requestSync();
+    resetLedgerForm();
+    setShowLedgerForm(false);
+  };
+
+  const updateLedgerStatus = async (
+    ledgerId: string,
+    status: StaffLedger['payroll_deduction_status']
+  ) => {
+    await db.staffLedgers.update(ledgerId, {
+      payroll_deduction_status: status,
+      synced: false,
+    });
+    requestSync();
+  };
+
+  return (
+    <div className="space-y-5 max-w-md mx-auto pb-20">
+      {/* Header Badge */}
+      <div className="relative p-4 bg-[#0f1117] border border-zinc-800/80 rounded-2xl shadow-xl flex items-center justify-between">
+        <div className="absolute top-1.5 left-1.5 w-1.5 h-1.5 border-t border-l border-orange-500/60" />
+        <div className="absolute top-1.5 right-1.5 w-1.5 h-1.5 border-t border-r border-orange-500/60" />
+
+        <div className="flex items-center space-x-3">
+          <div className="w-9 h-9 rounded-xl bg-orange-500/10 border border-orange-500/30 flex items-center justify-center">
+            <ClipboardList className="w-5 h-5 text-orange-500" />
+          </div>
+          <div>
+            <h2 className="font-mono text-xs font-bold text-white uppercase tracking-wider">
+              OWNER DASHBOARD
+            </h2>
+            <p className="text-[10px] font-mono text-zinc-500 uppercase tracking-widest">
+              SALES · STOCK · STAFF
+            </p>
+          </div>
+        </div>
+      </div>
+
+      {/* ===================== SALES OVERVIEW ===================== */}
+      <div className="relative bg-[#0f1117] border border-zinc-800/80 rounded-2xl p-4 shadow-xl space-y-4">
+        <div className="flex items-center gap-2 border-b border-zinc-800/80 pb-2">
+          <TrendingUp className="w-4 h-4 text-orange-400" />
+          <span className="font-mono text-xs font-bold text-zinc-300 uppercase tracking-wider">
+            Today's Sales
+          </span>
+        </div>
+
+        <div className="grid grid-cols-3 gap-2">
+          <div className="bg-zinc-900/60 border border-zinc-800/60 rounded-xl p-2.5 text-center">
+            <p className="text-[9px] font-mono text-zinc-500 uppercase tracking-widest mb-1">Revenue</p>
+            <p className="text-emerald-400 font-mono font-bold text-sm">{money(sales.revenue)}</p>
+          </div>
+          <div className="bg-zinc-900/60 border border-zinc-800/60 rounded-xl p-2.5 text-center">
+            <p className="text-[9px] font-mono text-zinc-500 uppercase tracking-widest mb-1">Orders</p>
+            <p className="text-white font-mono font-bold text-sm">{sales.orderCount}</p>
+          </div>
+          <div className="bg-zinc-900/60 border border-zinc-800/60 rounded-xl p-2.5 text-center">
+            <p className="text-[9px] font-mono text-zinc-500 uppercase tracking-widest mb-1">Avg Ticket</p>
+            <p className="text-white font-mono font-bold text-sm">{money(sales.avgTicket)}</p>
+          </div>
+        </div>
+
+        {/* Payment method split */}
+        <div className="flex gap-2">
+          <div className="flex-1 bg-zinc-900/40 border border-zinc-800/60 rounded-lg p-2 text-center">
+            <p className="text-[9px] font-mono text-zinc-500 uppercase">Cash</p>
+            <p className="text-xs font-mono font-bold text-zinc-200">{money(sales.paymentSplit.cash)}</p>
+          </div>
+          <div className="flex-1 bg-zinc-900/40 border border-zinc-800/60 rounded-lg p-2 text-center">
+            <p className="text-[9px] font-mono text-zinc-500 uppercase">M-Pesa</p>
+            <p className="text-xs font-mono font-bold text-zinc-200">{money(sales.paymentSplit.mpesa)}</p>
+          </div>
+          <div className="flex-1 bg-zinc-900/40 border border-zinc-800/60 rounded-lg p-2 text-center">
+            <p className="text-[9px] font-mono text-zinc-500 uppercase">Credit</p>
+            <p className="text-xs font-mono font-bold text-zinc-200">{money(sales.paymentSplit.credit)}</p>
+          </div>
+        </div>
+
+        {/* Risk / outstanding row */}
+        {(sales.unsettledCount > 0 || sales.creditValue > 0 || sales.lossValue > 0) && (
+          <div className="flex items-start gap-2 bg-red-500/5 border border-red-500/20 rounded-xl p-2.5">
+            <ShieldAlert className="w-3.5 h-3.5 text-red-400 mt-0.5 shrink-0" />
+            <div className="text-[10px] font-mono text-red-300 space-y-0.5">
+              {sales.unsettledCount > 0 && (
+                <p>{sales.unsettledCount} unsettled bill{sales.unsettledCount > 1 ? 's' : ''} — {money(sales.unsettledValue)} not yet collected</p>
+              )}
+              {sales.creditValue > 0 && <p>{money(sales.creditValue)} outstanding on credit</p>}
+              {sales.lossValue > 0 && <p>{money(sales.lossValue)} written off as unpaid loss</p>}
+            </div>
+          </div>
+        )}
+
+        {/* Items sold */}
+        <div>
+          <div className="flex items-center gap-1.5 mb-2">
+            <Receipt className="w-3.5 h-3.5 text-zinc-500" />
+            <span className="text-[10px] font-mono text-zinc-500 uppercase tracking-widest">Items Sold Today</span>
+          </div>
+          {sales.itemsSold.length === 0 ? (
+            <p className="text-zinc-600 text-[11px] font-mono text-center py-4">No sales settled yet today</p>
+          ) : (
+            <div className="space-y-1.5 max-h-44 overflow-y-auto pr-1">
+              {sales.itemsSold.map((it) => (
+                <div
+                  key={it.dish_name}
+                  className="flex items-center justify-between bg-zinc-900/40 px-2.5 py-1.5 rounded-lg border border-zinc-800/60"
+                >
+                  <span className="text-xs text-zinc-200 truncate">{it.dish_name}</span>
+                  <div className="flex items-center gap-2 shrink-0">
+                    <span className="text-[10px] font-mono text-orange-400 bg-orange-500/10 border border-orange-500/20 px-1.5 py-0.5 rounded">
+                      x{it.quantity}
+                    </span>
+                    <span className="text-[10px] font-mono text-zinc-500 w-14 text-right">{money(it.revenue)}</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* ===================== STOCK MONITOR (quick glance) ===================== */}
+      <div className="relative bg-[#0f1117] border border-zinc-800/80 rounded-2xl p-4 shadow-xl space-y-3">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <Package className="w-4 h-4 text-orange-400" />
+            <span className="font-mono text-xs font-bold text-zinc-300 uppercase tracking-wider">
+              Stock Monitor
+            </span>
+          </div>
+          <span className="text-[10px] font-mono text-zinc-500">
+            Value: <span className="text-zinc-300 font-bold">{money(stock.stockValue)}</span>
+          </span>
+        </div>
+
+        {stock.lowStock.length > 0 && (
+          <div className="flex items-center gap-2 bg-red-500/5 border border-red-500/20 rounded-xl p-2.5">
+            <AlertTriangle className="w-3.5 h-3.5 text-red-400 shrink-0" />
+            <span className="text-[10px] font-mono text-red-300">
+              {stock.lowStock.length} ingredient{stock.lowStock.length > 1 ? 's' : ''} running low — see Inventory below
+            </span>
+          </div>
+        )}
+      </div>
+
+      {/* ===================== INVENTORY & MENU MANAGEMENT ===================== */}
+      <StockMenuManager />
+
+      {/* ===================== STAFF MANAGEMENT ===================== */}
+      <div className="relative bg-[#0f1117] border border-zinc-800/80 rounded-2xl p-4 shadow-xl space-y-3">
+        <div className="flex items-center justify-between border-b border-zinc-800/80 pb-2">
+          <div className="flex items-center gap-2">
+            <Users className="w-4 h-4 text-orange-400" />
+            <span className="font-mono text-xs font-bold text-zinc-300 uppercase tracking-wider">
+              Staff Management
+            </span>
+          </div>
+          <button
+            onClick={() => setShowStaffForm(true)}
+            className="flex items-center gap-1 text-[10px] font-mono font-bold uppercase tracking-wider text-orange-400 bg-orange-500/10 border border-orange-500/30 px-2.5 py-1.5 rounded-lg active:scale-95 transition"
+          >
+            <UserPlus className="w-3 h-3" /> Add Staff
+          </button>
+        </div>
+
+        <div className="space-y-2">
+          {staff?.map((s) => {
+            const adminCount = (staff ?? []).filter((x) => x.role === 'admin').length;
+            const isSelf = currentUser?.user_id === s.user_id;
+            const isLastAdmin = s.role === 'admin' && adminCount <= 1;
+            const isConfirming = confirmDeleteStaff === s.user_id;
+
+            return (
+              <div
+                key={s.user_id}
+                className="bg-zinc-900/60 p-2.5 rounded-xl border border-zinc-800/60"
+              >
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => toggleActiveShift(s.user_id, s.active_shift)}
+                      title={s.active_shift ? 'On shift — tap to deactivate' : 'Inactive — tap to reactivate'}
+                      className={`w-2 h-2 rounded-full transition ${
+                        s.active_shift ? 'bg-emerald-400 animate-pulse' : 'bg-zinc-600'
+                      }`}
+                    />
+                    <span className="text-xs font-medium text-white">{s.name}</span>
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-[9px] font-mono text-zinc-500 uppercase tracking-widest border border-zinc-800 px-1.5 py-0.5 rounded">
+                      {s.role}
+                    </span>
+                    {!isSelf && !isLastAdmin && (
+                      <button
+                        onClick={() => setConfirmDeleteStaff(s.user_id)}
+                        title="Delete staff account"
+                        className="p-1 rounded-lg bg-zinc-800 hover:bg-red-500/20 text-zinc-400 hover:text-red-400"
+                      >
+                        <Trash2 className="w-3 h-3" />
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                {isConfirming && (
+                  <div className="mt-2 pt-2 border-t border-zinc-800/60 flex gap-2">
+                    <button
+                      onClick={() => setConfirmDeleteStaff(null)}
+                      className="flex-1 py-1.5 bg-zinc-800 text-zinc-400 rounded-lg font-mono text-[10px] font-bold uppercase"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      onClick={() => handleDeleteStaff(s.user_id)}
+                      className="flex-1 py-1.5 bg-red-500/20 text-red-400 border border-red-500/30 rounded-lg font-mono text-[10px] font-bold uppercase"
+                    >
+                      Confirm Delete
+                    </button>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* ===================== PAYROLL LEDGER (secondary) ===================== */}
+      <div className="pt-1">
+        <div className="flex items-center justify-between mb-3">
+          <div className="flex items-center gap-2">
+            <Wallet className="w-3.5 h-3.5 text-zinc-500" />
+            <span className="font-mono text-[11px] font-bold text-zinc-500 uppercase tracking-widest">
+              Payroll Ledger
+            </span>
+          </div>
+          <button
+            onClick={() => setShowLedgerForm(true)}
+            className="flex items-center gap-1 text-[10px] font-mono font-bold uppercase tracking-wider text-zinc-400 bg-zinc-900 border border-zinc-800 px-2.5 py-1.5 rounded-lg active:scale-95 transition"
+          >
+            <Plus className="w-3 h-3" /> Log Deduction
+          </button>
+        </div>
+
+        <div className="grid grid-cols-3 gap-2 mb-3">
+          <div className="relative bg-[#0f1117] border border-red-500/20 rounded-xl p-3 text-center">
+            <p className="text-[9px] font-mono text-zinc-500 uppercase tracking-widest mb-1">Pending</p>
+            <p className="text-red-400 font-mono font-bold text-sm">{money(ledgerTotals.pending)}</p>
+          </div>
+          <div className="relative bg-[#0f1117] border border-orange-500/20 rounded-xl p-3 text-center">
+            <p className="text-[9px] font-mono text-zinc-500 uppercase tracking-widest mb-1">Deducted</p>
+            <p className="text-orange-400 font-mono font-bold text-sm">{money(ledgerTotals.deducted)}</p>
+          </div>
+          <div className="relative bg-[#0f1117] border border-emerald-500/20 rounded-xl p-3 text-center">
+            <p className="text-[9px] font-mono text-zinc-500 uppercase tracking-widest mb-1">Waived</p>
+            <p className="text-emerald-400 font-mono font-bold text-sm">{money(ledgerTotals.waived)}</p>
+          </div>
+        </div>
+
+        {/* Ledger Filter Tabs */}
+        <div className="flex bg-[#0f1117] p-1 rounded-2xl border border-zinc-800/80 shadow-lg mb-3">
+          {(['all', 'pending', 'deducted', 'waived'] as const).map((f) => (
+            <button
+              key={f}
+              onClick={() => setFilter(f)}
+              className={`flex-1 py-2 rounded-xl font-mono text-[10px] font-bold tracking-wider uppercase transition ${
+                filter === f
+                  ? 'bg-orange-500 text-zinc-950 shadow-md shadow-orange-500/20'
+                  : 'text-zinc-400 hover:text-white'
+              }`}
+            >
+              {f}
+            </button>
+          ))}
+        </div>
+
+        {/* Ledger Entries */}
+        <div className="space-y-3">
+          {filteredLedgers.length === 0 ? (
+            <div className="relative text-center py-10 bg-[#0f1117] rounded-3xl border border-zinc-800/80 p-6 shadow-xl">
+              <CheckCircle2 className="w-9 h-9 text-orange-500 mx-auto mb-2 opacity-80" />
+              <p className="text-white font-mono font-bold text-xs uppercase tracking-wider">
+                No Entries
+              </p>
+              <p className="text-zinc-500 text-[11px] font-mono mt-1">
+                Nothing logged for this filter yet
+              </p>
+            </div>
+          ) : (
+            filteredLedgers.map((l) => {
+              const amount = l.shortage_amount + l.spoilage_cost;
+              const staffName = staffMap.get(l.staff_id)?.name ?? 'Unknown Staff';
+              return (
+                <div
+                  key={l.ledger_id}
+                  className="relative bg-[#0f1117] border border-zinc-800/80 rounded-2xl p-4 shadow-xl space-y-3"
+                >
+                  <div className="absolute top-1.5 left-1.5 w-1.5 h-1.5 border-t border-l border-zinc-700" />
+                  <div className="absolute top-1.5 right-1.5 w-1.5 h-1.5 border-t border-r border-zinc-700" />
+
+                  <div className="flex justify-between items-center border-b border-zinc-800/80 pb-2">
+                    <div>
+                      <p className="text-xs font-semibold text-white">{staffName}</p>
+                      <p className="text-[10px] font-mono text-zinc-500">
+                        {new Date(l.date).toLocaleDateString([], {
+                          day: '2-digit',
+                          month: 'short',
+                        })}
+                      </p>
+                    </div>
+                    <span className="text-orange-400 font-mono font-bold text-sm">
+                      {money(amount)}
+                    </span>
+                  </div>
+
+                  <div className="flex items-start gap-2 text-xs text-zinc-300">
+                    <AlertTriangle className="w-3.5 h-3.5 text-zinc-500 mt-0.5 shrink-0" />
+                    <p>{l.reason}</p>
+                  </div>
+
+                  {(l.shortage_amount > 0 || l.spoilage_cost > 0) && (
+                    <div className="flex gap-2 font-mono text-[10px] text-zinc-500">
+                      {l.shortage_amount > 0 && (
+                        <span className="bg-zinc-900/60 border border-zinc-800/60 px-2 py-1 rounded-lg">
+                          Shortage: {money(l.shortage_amount)}
+                        </span>
+                      )}
+                      {l.spoilage_cost > 0 && (
+                        <span className="bg-zinc-900/60 border border-zinc-800/60 px-2 py-1 rounded-lg">
+                          Spoilage: {money(l.spoilage_cost)}
+                        </span>
+                      )}
+                    </div>
+                  )}
+
+                  {l.payroll_deduction_status === 'pending' ? (
+                    <div className="flex gap-2 pt-1">
+                      <button
+                        onClick={() => updateLedgerStatus(l.ledger_id, 'waived')}
+                        className="flex-1 py-2 bg-zinc-800 text-zinc-300 rounded-xl font-mono text-[10px] font-bold uppercase tracking-wider active:scale-95 transition"
+                      >
+                        Waive
+                      </button>
+                      <button
+                        onClick={() => updateLedgerStatus(l.ledger_id, 'deducted')}
+                        className="flex-1 py-2 bg-orange-500 text-zinc-950 rounded-xl font-mono text-[10px] font-bold uppercase tracking-wider shadow-lg shadow-orange-500/20 active:scale-95 transition"
+                      >
+                        Mark Deducted
+                      </button>
+                    </div>
+                  ) : (
+                    <div
+                      className={`flex items-center justify-center gap-1.5 py-2 rounded-xl font-mono text-[10px] font-bold uppercase tracking-wider ${
+                        l.payroll_deduction_status === 'deducted'
+                          ? 'bg-orange-500/10 border border-orange-500/30 text-orange-400'
+                          : 'bg-emerald-500/10 border border-emerald-500/30 text-emerald-400'
+                      }`}
+                    >
+                      {l.payroll_deduction_status === 'deducted' ? (
+                        <XCircle className="w-3.5 h-3.5" />
+                      ) : (
+                        <CheckCircle2 className="w-3.5 h-3.5" />
+                      )}
+                      {l.payroll_deduction_status === 'deducted' ? 'Deducted From Payroll' : 'Waived'}
+                    </div>
+                  )}
+                </div>
+              );
+            })
+          )}
+        </div>
+      </div>
+
+      {/* Add Staff Modal */}
+      {showStaffForm && (
+        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/70 backdrop-blur-sm p-4">
+          <div className="relative w-full max-w-sm bg-[#0f1117] border border-zinc-800 rounded-3xl p-5 shadow-2xl space-y-4">
+            <div className="flex items-center justify-between">
+              <h3 className="font-mono text-xs font-bold text-white uppercase tracking-wider">
+                Add Staff Account
+              </h3>
+              <button
+                onClick={() => {
+                  setShowStaffForm(false);
+                  resetStaffForm();
+                }}
+                className="p-1.5 rounded-lg bg-zinc-900 hover:bg-zinc-800 text-zinc-400 border border-zinc-800"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
+
+            <div className="space-y-3">
+              <div>
+                <label className="text-[10px] font-mono text-zinc-500 uppercase tracking-widest mb-1 block">
+                  Full Name
+                </label>
+                <input
+                  type="text"
+                  value={newName}
+                  onChange={(e) => setNewName(e.target.value)}
+                  placeholder="e.g. James Mwangi"
+                  className="w-full bg-zinc-950 border border-zinc-700 rounded-xl px-3 py-2.5 text-xs text-white font-mono focus:outline-none focus:border-orange-500"
+                />
+              </div>
+
+              <div>
+                <label className="text-[10px] font-mono text-zinc-500 uppercase tracking-widest mb-1 block">
+                  Role
+                </label>
+                <div className="grid grid-cols-3 gap-2">
+                  {(['waiter', 'cook', 'admin'] as const).map((role) => (
+                    <button
+                      key={role}
+                      onClick={() => setNewRole(role)}
+                      className={`py-2 text-[10px] font-mono font-bold uppercase tracking-wider rounded-xl border transition ${
+                        newRole === role
+                          ? 'bg-orange-500 text-zinc-950 border-orange-400'
+                          : 'bg-zinc-800 text-zinc-400 border-zinc-700'
+                      }`}
+                    >
+                      {role}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div>
+                <label className="text-[10px] font-mono text-zinc-500 uppercase tracking-widest mb-1 block">
+                  4-Digit PIN
+                </label>
+                <input
+                  type="text"
+                  inputMode="numeric"
+                  maxLength={4}
+                  value={newPin}
+                  onChange={(e) => setNewPin(e.target.value.replace(/\D/g, '').slice(0, 4))}
+                  placeholder="e.g. 4821"
+                  className="w-full bg-zinc-950 border border-zinc-700 rounded-xl px-3 py-2.5 text-sm text-white font-mono tracking-[0.5em] text-center focus:outline-none focus:border-orange-500"
+                />
+              </div>
+
+              {staffError && (
+                <p className="text-[11px] font-mono text-red-400 bg-red-500/10 border border-red-500/20 rounded-lg px-3 py-2">
+                  {staffError}
+                </p>
+              )}
+            </div>
+
+            <button
+              onClick={handleCreateStaff}
+              className="w-full py-3.5 bg-orange-500 hover:bg-orange-400 active:scale-[0.98] text-zinc-950 font-mono font-bold uppercase tracking-wider text-xs rounded-2xl transition shadow-lg shadow-orange-500/20"
+            >
+              Create Account
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Add Ledger Entry Modal */}
+      {showLedgerForm && (
+        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/70 backdrop-blur-sm p-4">
+          <div className="relative w-full max-w-sm bg-[#0f1117] border border-zinc-800 rounded-3xl p-5 shadow-2xl space-y-4">
+            <div className="flex items-center justify-between">
+              <h3 className="font-mono text-xs font-bold text-white uppercase tracking-wider">
+                Log Shortage / Spoilage
+              </h3>
+              <button
+                onClick={() => {
+                  setShowLedgerForm(false);
+                  resetLedgerForm();
+                }}
+                className="p-1.5 rounded-lg bg-zinc-900 hover:bg-zinc-800 text-zinc-400 border border-zinc-800"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
+
+            <div className="space-y-3">
+              <div>
+                <label className="text-[10px] font-mono text-zinc-500 uppercase tracking-widest mb-1 block">
+                  Staff Member
+                </label>
+                <select
+                  value={formStaffId}
+                  onChange={(e) => setFormStaffId(e.target.value)}
+                  className="w-full bg-zinc-950 border border-zinc-700 rounded-xl px-3 py-2.5 text-xs text-white font-mono focus:outline-none focus:border-orange-500"
+                >
+                  <option value="">Select staff...</option>
+                  {staff?.map((s) => (
+                    <option key={s.user_id} value={s.user_id}>
+                      {s.name} ({s.role})
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="text-[10px] font-mono text-zinc-500 uppercase tracking-widest mb-1 block">
+                    Shortage (KES)
+                  </label>
+                  <input
+                    type="number"
+                    inputMode="decimal"
+                    placeholder="0"
+                    value={formShortage}
+                    onChange={(e) => setFormShortage(e.target.value)}
+                    className="w-full bg-zinc-950 border border-zinc-700 rounded-xl px-3 py-2.5 text-xs text-white font-mono focus:outline-none focus:border-orange-500"
+                  />
+                </div>
+                <div>
+                  <label className="text-[10px] font-mono text-zinc-500 uppercase tracking-widest mb-1 block">
+                    Spoilage (KES)
+                  </label>
+                  <input
+                    type="number"
+                    inputMode="decimal"
+                    placeholder="0"
+                    value={formSpoilage}
+                    onChange={(e) => setFormSpoilage(e.target.value)}
+                    className="w-full bg-zinc-950 border border-zinc-700 rounded-xl px-3 py-2.5 text-xs text-white font-mono focus:outline-none focus:border-orange-500"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="text-[10px] font-mono text-zinc-500 uppercase tracking-widest mb-1 block">
+                  Reason
+                </label>
+                <textarea
+                  value={formReason}
+                  onChange={(e) => setFormReason(e.target.value)}
+                  placeholder="e.g. Till short by KES 200 on closing count"
+                  rows={2}
+                  className="w-full bg-zinc-950 border border-zinc-700 rounded-xl px-3 py-2.5 text-xs text-white font-mono resize-none focus:outline-none focus:border-orange-500"
+                />
+              </div>
+            </div>
+
+            <button
+              onClick={handleAddLedgerEntry}
+              disabled={!formStaffId || !formReason.trim() || (!formShortage && !formSpoilage)}
+              className="w-full py-3.5 bg-orange-500 hover:bg-orange-400 disabled:opacity-40 disabled:pointer-events-none active:scale-[0.98] text-zinc-950 font-mono font-bold uppercase tracking-wider text-xs rounded-2xl transition shadow-lg shadow-orange-500/20"
+            >
+              Save Entry
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+</file>
+
+<file path="src/pages/KitchenDisplay.tsx">
+import React from 'react';
+import { useLiveQuery } from 'dexie-react-hooks';
+import { db } from '../db/kibandaDB';
+import { requestSync } from '../db/sync';
+import { useAuth } from '../context/AuthContext';
+import { Check, Flame, Package } from 'lucide-react';
+import type { OrderItem } from '../types';
+
+export const KitchenDisplay: React.FC = () => {
+  const { currentUser } = useAuth();
+
+  // Live query the kitchen queue by prep status — independent of whether the
+  // waiter has collected payment yet. A ticket can be "ready" and still unpaid.
+  const orders = useLiveQuery(
+    () => db.orders.where('kitchen_status').equals('queued').reverse().toArray(),
+    []
+  );
+
+  const ingredients = useLiveQuery(() => db.ingredients.toArray(), []);
+  const recipes = useLiveQuery(() => db.recipes.toArray(), []);
+
+  // Handle Mark as Prepared & Deplete Ingredients
+  const handleCompleteOrder = async (orderId: string, items: OrderItem[]) => {
+    if (!recipes || !ingredients) return;
+
+    // 1. Deduct ingredients for every item in the ticket based on recipe mappings
+    for (const item of items) {
+      const matchingRecipes = recipes.filter((r) => r.dish_name === item.dish_name);
+
+      for (const recipe of matchingRecipes) {
+        // Calculate total amount needed for this order item
+        const requiredAmount = recipe.quantity_per_plate * item.quantity;
+        
+        // Find matching ingredient by ingredient_id
+        const ingredientItem = ingredients.find((ing) => ing.ingredient_id === recipe.ingredient_id);
+
+        if (ingredientItem) {
+          const newQty = Math.max(0, ingredientItem.quantity_on_hand - requiredAmount);
+          await db.ingredients
+            .where('ingredient_id')
+            .equals(ingredientItem.ingredient_id)
+            .modify({
+              quantity_on_hand: newQty,
+              synced: false,
+            });
+        }
+      }
+    }
+
+    // 2. Mark the ticket ready for pickup — payment status is untouched;
+    // the waiter closes the bill independently, whenever the customer pays.
+    await db.orders
+      .where('order_id')
+      .equals(orderId)
+      .modify({
+        kitchen_status: 'ready',
+        confirmed_by_cook_id: currentUser?.user_id,
+        synced: false,
+      });
+    requestSync();
+  };
+
+  return (
+    <div className="space-y-6 max-w-md mx-auto pb-20">
+      {/* Header Badge */}
+      <div className="relative p-4 bg-[#0f1117] border border-zinc-800/80 rounded-2xl shadow-xl flex items-center justify-between">
+        <div className="absolute top-1.5 left-1.5 w-1.5 h-1.5 border-t border-l border-orange-500/60" />
+        <div className="absolute top-1.5 right-1.5 w-1.5 h-1.5 border-t border-r border-orange-500/60" />
+
+        <div className="flex items-center space-x-3">
+          <div className="w-9 h-9 rounded-xl bg-orange-500/10 border border-orange-500/30 flex items-center justify-center">
+            <Flame className="w-5 h-5 text-orange-500" />
+          </div>
+          <div>
+            <h2 className="font-mono text-xs font-bold text-white uppercase tracking-wider">
+              KITCHEN DISPLAY TERMINAL
+            </h2>
+            <p className="text-[10px] font-mono text-zinc-500 uppercase tracking-widest">
+              LIVE TICKETS & INGREDIENT DEPLETION
+            </p>
+          </div>
+        </div>
+
+        <div className="text-right">
+          <span className="font-mono text-xs font-bold text-orange-400">
+            {orders?.length || 0}
+          </span>
+          <span className="block text-[9px] font-mono text-zinc-500 uppercase">QUEUED</span>
+        </div>
+      </div>
+
+      {/* Orders List */}
+      <div className="space-y-4">
+        {!orders || orders.length === 0 ? (
+          <div className="relative text-center py-12 bg-[#0f1117] rounded-3xl border border-zinc-800/80 p-6 shadow-xl">
+            <Flame className="w-10 h-10 text-zinc-700 mx-auto mb-2 opacity-50" />
+            <p className="text-white font-mono font-bold text-xs uppercase tracking-wider">
+              KITCHEN QUEUE CLEAR
+            </p>
+            <p className="text-zinc-500 text-[11px] font-mono mt-1">
+              WAITING FOR NEW TICKETS FROM WAITERS
+            </p>
+          </div>
+        ) : (
+          orders.map((order) => (
+            <div
+              key={order.order_id}
+              className="relative bg-[#0f1117] border border-zinc-800/80 rounded-2xl p-4 shadow-xl space-y-4"
+            >
+              {/* Corner Accents */}
+              <div className="absolute top-1.5 left-1.5 w-1.5 h-1.5 border-t border-l border-zinc-700" />
+              <div className="absolute top-1.5 right-1.5 w-1.5 h-1.5 border-t border-r border-zinc-700" />
+
+              {/* Ticket Top Meta */}
+              <div className="flex justify-between items-center border-b border-zinc-800/80 pb-2.5">
+                <div className="flex items-center gap-2">
+                  <span className="w-2 h-2 rounded-full bg-orange-500 animate-pulse" />
+                  <span className="text-[11px] font-mono font-bold text-white tracking-wider uppercase">
+                    TICKET #{order.order_id.slice(0, 6)}
+                  </span>
+                </div>
+                <span className="text-[10px] font-mono text-zinc-400">
+                  {new Date(order.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                </span>
+              </div>
+
+              {/* Items List */}
+              <div className="space-y-2">
+                {order.items.map((item, idx) => (
+                  <div
+                    key={idx}
+                    className="flex justify-between items-center bg-zinc-900/60 p-2.5 rounded-xl border border-zinc-800/60"
+                  >
+                    <div>
+                      <span className="font-medium text-sm text-white block">{item.dish_name}</span>
+                      {item.selected_modifiers && item.selected_modifiers.length > 0 && (
+                        <span className="text-[10px] font-mono text-zinc-400">
+                          {item.selected_modifiers.join(', ')}
+                        </span>
+                      )}
+                    </div>
+                    <span className="font-mono font-bold text-xs bg-orange-500/10 border border-orange-500/30 text-orange-400 px-2 py-0.5 rounded-lg">
+                      x{item.quantity}
+                    </span>
+                  </div>
+                ))}
+              </div>
+
+              {/* Mark as Done & Deplete Action */}
+              <button
+                onClick={() => handleCompleteOrder(order.order_id, order.items)}
+                className="w-full py-3 bg-orange-500 hover:bg-orange-400 active:scale-[0.98] text-zinc-950 font-mono font-bold uppercase tracking-wider text-xs rounded-xl transition flex items-center justify-center gap-2 shadow-lg shadow-orange-500/20"
+              >
+                <Check className="w-4 h-4" /> MARK PREPARED & DEDUCT INGREDIENTS
+              </button>
+            </div>
+          ))
+        )}
+      </div>
+
+      {/* Low Stock Live Monitor */}
+      <div className="relative bg-[#0f1117] border border-zinc-800/80 rounded-2xl p-4 shadow-xl space-y-3">
+        <div className="flex items-center gap-2 border-b border-zinc-800/80 pb-2">
+          <Package className="w-4 h-4 text-orange-400" />
+          <span className="font-mono text-xs font-bold text-zinc-300 uppercase tracking-wider">
+            STOCK MONITOR
+          </span>
+        </div>
+
+        <div className="grid grid-cols-2 gap-2 max-h-36 overflow-y-auto pr-1">
+          {ingredients?.map((item) => {
+            const isLow = item.quantity_on_hand <= item.low_stock_threshold;
+            return (
+              <div
+                key={item.ingredient_id}
+                className={`p-2 rounded-xl border font-mono text-xs flex justify-between items-center ${
+                  isLow
+                    ? 'bg-red-500/10 border-red-500/30 text-red-400'
+                    : 'bg-zinc-900/40 border-zinc-800/60 text-zinc-300'
+                }`}
+              >
+                <span className="truncate max-w-[80px]">{item.name}</span>
+                <span className="font-bold">
+                  {item.quantity_on_hand} {item.unit}
+                </span>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+};
+</file>
+
+<file path="src/pages/Login.tsx">
+import React, { useState } from 'react';
+import { useAuth } from '../context/AuthContext';
+import { Lock, Utensils } from 'lucide-react';
+
+export const Login: React.FC = () => {
+  const [pin, setPin] = useState('');
+  const [error, setError] = useState('');
+  const { loginWithPin } = useAuth();
+
+  const handleKeyPress = (num: string) => {
+    if (pin.length < 4) {
+      setPin((prev) => prev + num);
+      setError('');
+    }
+  };
+
+  const handleDelete = () => {
+    setPin((prev) => prev.slice(0, -1));
+    setError('');
+  };
+
+  const handleLogin = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    if (pin.length !== 4) {
+      setError('Please enter a 4-digit PIN');
+      return;
+    }
+
+    const success = await loginWithPin(pin);
+    if (!success) {
+      setError('Invalid PIN code. Try again.');
+      setPin('');
+    }
+  };
+
+  return (
+    <div className="min-h-screen bg-slate-950 text-white flex flex-col items-center justify-center p-4">
+      <div className="w-full max-w-sm bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-2xl text-center">
+        
+        {/* Brand Header */}
+        <div className="flex justify-center mb-3 text-amber-500">
+          <div className="p-3 bg-amber-500/10 rounded-2xl border border-amber-500/20">
+            <Utensils className="w-9 h-9 text-amber-400" />
+          </div>
+        </div>
+        <h1 className="text-2xl font-bold tracking-tight text-white">Garomax Bites</h1>
+        <p className="text-slate-400 text-sm mt-1 mb-6">Enter staff PIN to unlock terminal</p>
+
+        {/* PIN Indicators */}
+        <div className="flex justify-center gap-3 mb-6">
+          {[0, 1, 2, 3].map((index) => (
+            <div
+              key={index}
+              className={`w-4 h-4 rounded-full border-2 transition-all duration-150 ${
+                pin.length > index
+                  ? 'bg-amber-400 border-amber-400 scale-110 shadow-lg shadow-amber-500/50'
+                  : 'border-slate-700 bg-slate-800'
+              }`}
+            />
+          ))}
+        </div>
+
+        {error && (
+          <p className="text-red-400 text-xs font-semibold mb-4 bg-red-950/50 py-2 rounded-xl border border-red-800/60">
+            {error}
+          </p>
+        )}
+
+        {/* Touch Keypad Grid */}
+        <div className="grid grid-cols-3 gap-3 mb-6">
+          {['1', '2', '3', '4', '5', '6', '7', '8', '9'].map((num) => (
+            <button
+              key={num}
+              onClick={() => handleKeyPress(num)}
+              className="h-14 text-xl font-bold rounded-2xl bg-slate-800 hover:bg-slate-700 active:scale-95 transition-all text-white shadow-sm border border-slate-700/50"
+            >
+              {num}
+            </button>
+          ))}
+          <button
+            onClick={handleDelete}
+            className="h-14 text-xs font-bold uppercase tracking-wider rounded-2xl bg-slate-800/50 hover:bg-slate-800 active:scale-95 text-slate-400 border border-slate-800"
+          >
+            Clear
+          </button>
+          <button
+            onClick={() => handleKeyPress('0')}
+            className="h-14 text-xl font-bold rounded-2xl bg-slate-800 hover:bg-slate-700 active:scale-95 transition-all text-white shadow-sm border border-slate-700/50"
+          >
+            0
+          </button>
+          <button
+            onClick={() => handleLogin()}
+            className="h-14 text-sm font-bold rounded-2xl bg-amber-500 hover:bg-amber-400 text-slate-950 active:scale-95 transition-all flex items-center justify-center shadow-lg shadow-amber-500/20"
+          >
+            <Lock className="w-5 h-5" />
+          </button>
+        </div>
+
+        {/* Demo PIN Reference */}
+        <div className="text-left text-xs bg-slate-950/80 p-3 rounded-xl border border-slate-800 text-slate-400">
+          <p className="font-semibold text-slate-300 mb-1">Default Demo PINs:</p>
+          <div className="grid grid-cols-3 gap-1 font-mono text-[11px]">
+            <div>Admin: <span className="text-amber-400">0000</span></div>
+            <div>Cook: <span className="text-amber-400">1111</span></div>
+            <div>Waiter: <span className="text-amber-400">2222</span></div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  );
+};
+</file>
+
+<file path="src/types/index.ts">
+export type UserRole = 'admin' | 'cook' | 'waiter';
+
+export interface User {
+  user_id: string;
+  name: string;
+  role: UserRole;
+  pin_code: string;
+  active_shift: boolean;
+}
+
+export interface Ingredient {
+  ingredient_id: string;
+  name: string;
+  unit: 'g' | 'kg' | 'ml' | 'l' | 'pcs';
+  quantity_on_hand: number;
+  last_purchase_cost: number;
+  low_stock_threshold: number;
+  synced?: boolean;
+}
+
+export interface RecipeItem {
+  dish_name: string;
+  selling_price: number;
+  ingredient_id: string;
+  quantity_per_plate: number;
+}
+
+export type PaymentStatus = 'active' | 'paid' | 'credit' | 'unpaid_loss';
+export type PaymentMethod = 'cash' | 'mpesa' | 'credit';
+export type KitchenStatus = 'queued' | 'ready';
+
+export interface OrderItem {
+  dish_name: string;
+  quantity: number;
+  unit_price: number;
+  selected_modifiers?: string[];
+}
+
+export interface Order {
+  order_id: string;
+  payment_status: PaymentStatus;
+  payment_method?: PaymentMethod;
+  mpesa_code?: string;
+  kitchen_status: KitchenStatus;
+  items: OrderItem[];
+  total_amount: number;
+  placed_by_waiter_id: string;
+  confirmed_by_cook_id?: string;
+  timestamp: string;
+  synced?: boolean;
+}
+
+export type WasteReason = 'burnt_overcooked' | 'spilled_dropped' | 'spoiled_raw';
+
+export interface WasteLog {
+  waste_id: string;
+  dish_or_ingredient: string;
+  quantity: number;
+  reason: WasteReason;
+  logged_by_cook_id: string;
+  deduction_flag: boolean;
+  timestamp: string;
+  synced?: boolean;
+}
+
+export interface StaffLedger {
+  ledger_id: string;
+  staff_id: string;
+  date: string;
+  shortage_amount: number;
+  spoilage_cost: number;
+  reason: string;
+  payroll_deduction_status: 'pending' | 'deducted' | 'waived';
+  synced?: boolean;
+}
+</file>
+
+<file path="src/App.css">
+.counter {
+  font-size: 16px;
+  padding: 5px 10px;
+  border-radius: 5px;
+  color: var(--accent);
+  background: var(--accent-bg);
+  border: 2px solid transparent;
+  transition: border-color 0.3s;
+  margin-bottom: 24px;
+
+  &:hover {
+    border-color: var(--accent-border);
+  }
+  &:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+}
+
+.hero {
+  position: relative;
+
+  .base,
+  .framework,
+  .vite {
+    inset-inline: 0;
+    margin: 0 auto;
+  }
+
+  .base {
+    width: 170px;
+    position: relative;
+    z-index: 0;
+  }
+
+  .framework,
+  .vite {
+    position: absolute;
+  }
+
+  .framework {
+    z-index: 1;
+    top: 34px;
+    height: 28px;
+    transform: perspective(2000px) rotateZ(300deg) rotateX(44deg) rotateY(39deg)
+      scale(1.4);
+  }
+
+  .vite {
+    z-index: 0;
+    top: 107px;
+    height: 26px;
+    width: auto;
+    transform: perspective(2000px) rotateZ(300deg) rotateX(40deg) rotateY(39deg)
+      scale(0.8);
+  }
+}
+
+#center {
+  display: flex;
+  flex-direction: column;
+  gap: 25px;
+  place-content: center;
+  place-items: center;
+  flex-grow: 1;
+
+  @media (max-width: 1024px) {
+    padding: 32px 20px 24px;
+    gap: 18px;
+  }
+}
+
+#next-steps {
+  display: flex;
+  border-top: 1px solid var(--border);
+  text-align: left;
+
+  & > div {
+    flex: 1 1 0;
+    padding: 32px;
+    @media (max-width: 1024px) {
+      padding: 24px 20px;
+    }
+  }
+
+  .icon {
+    margin-bottom: 16px;
+    width: 22px;
+    height: 22px;
+  }
+
+  @media (max-width: 1024px) {
+    flex-direction: column;
+    text-align: center;
+  }
+}
+
+#docs {
+  border-right: 1px solid var(--border);
+
+  @media (max-width: 1024px) {
+    border-right: none;
+    border-bottom: 1px solid var(--border);
+  }
+}
+
+#next-steps ul {
+  list-style: none;
+  padding: 0;
+  display: flex;
+  gap: 8px;
+  margin: 32px 0 0;
+
+  .logo {
+    height: 18px;
+  }
+
+  a {
+    color: var(--text-h);
+    font-size: 16px;
+    border-radius: 6px;
+    background: var(--social-bg);
+    display: flex;
+    padding: 6px 12px;
+    align-items: center;
+    gap: 8px;
+    text-decoration: none;
+    transition: box-shadow 0.3s;
+
+    &:hover {
+      box-shadow: var(--shadow);
+    }
+    .button-icon {
+      height: 18px;
+      width: 18px;
+    }
+  }
+
+  @media (max-width: 1024px) {
+    margin-top: 20px;
+    flex-wrap: wrap;
+    justify-content: center;
+
+    li {
+      flex: 1 1 calc(50% - 8px);
+    }
+
+    a {
+      width: 100%;
+      justify-content: center;
+      box-sizing: border-box;
+    }
+  }
+}
+
+#spacer {
+  height: 88px;
+  border-top: 1px solid var(--border);
+  @media (max-width: 1024px) {
+    height: 48px;
+  }
+}
+
+.ticks {
+  position: relative;
+  width: 100%;
+
+  &::before,
+  &::after {
+    content: '';
+    position: absolute;
+    top: -4.5px;
+    border: 5px solid transparent;
+  }
+
+  &::before {
+    left: 0;
+    border-left-color: var(--border);
+  }
+  &::after {
+    right: 0;
+    border-right-color: var(--border);
+  }
+}
+</file>
+
+<file path="src/index.css">
+@import "tailwindcss";
+</file>
+
+<file path="src/main.tsx">
+import React from 'react'
+import ReactDOM from 'react-dom/client'
+import App from './App'
+import './index.css'
+import { seedInitialData } from './db/seedLocalData'
+import { startSync } from './db/sync'
+
+// Initialize local Dexie database, then bring in/wire up Supabase sync
+seedInitialData().then(() => startSync());
+
+ReactDOM.createRoot(document.getElementById('root')!).render(
+  <React.StrictMode>
+    <App />
+  </React.StrictMode>,
+)
+</file>
+
+<file path=".gitignore">
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+node_modules
+dist
+dist-ssr
+*.local
+.env
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+</file>
+
+<file path="eslint.config.js">
+import js from '@eslint/js'
+import globals from 'globals'
+import reactHooks from 'eslint-plugin-react-hooks'
+import reactRefresh from 'eslint-plugin-react-refresh'
+import tseslint from 'typescript-eslint'
+import { defineConfig, globalIgnores } from 'eslint/config'
+
+export default defineConfig([
+  globalIgnores(['dist']),
+  {
+    files: ['**/*.{ts,tsx}'],
+    extends: [
+      js.configs.recommended,
+      tseslint.configs.recommended,
+      reactHooks.configs.flat.recommended,
+      reactRefresh.configs.vite,
+    ],
+    languageOptions: {
+      globals: globals.browser,
+    },
+  },
+])
+</file>
+
+<file path="index.html">
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>garomax-bites</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
+</file>
+
+<file path="package.json">
+{
+  "name": "garomax-bites",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "lint": "eslint .",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.110.8",
+    "@tailwindcss/vite": "^4.3.3",
+    "dexie": "^4.4.4",
+    "dexie-react-hooks": "^4.4.0",
+    "lucide-react": "^1.26.0",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/node": "^24.13.2",
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^6.0.3",
+    "autoprefixer": "^10.5.4",
+    "eslint": "^10.6.0",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "eslint-plugin-react-refresh": "^0.5.3",
+    "globals": "^17.7.0",
+    "postcss": "^8.5.23",
+    "tailwindcss": "^4.3.3",
+    "typescript": "~6.0.2",
+    "typescript-eslint": "^8.62.0",
+    "vite": "^8.1.1"
+  }
+}
+</file>
+
+<file path="tsconfig.app.json">
+{
+  "compilerOptions": {
+    "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.app.tsbuildinfo",
+    "target": "es2023",
+    "lib": ["ES2023", "DOM"],
+    "module": "esnext",
+    "types": ["vite/client"],
+    "allowArbitraryExtensions": true,
+    "skipLibCheck": true,
+
+    /* Bundler mode */
+    "moduleResolution": "bundler",
+    "allowImportingTsExtensions": true,
+    "verbatimModuleSyntax": true,
+    "moduleDetection": "force",
+    "noEmit": true,
+    "jsx": "react-jsx",
+
+    /* Linting */
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "erasableSyntaxOnly": true,
+    "noFallthroughCasesInSwitch": true
+  },
+  "include": ["src"]
+}
+</file>
+
+<file path="tsconfig.json">
+{
+  "files": [],
+  "references": [
+    { "path": "./tsconfig.app.json" },
+    { "path": "./tsconfig.node.json" }
+  ]
+}
+</file>
+
+<file path="tsconfig.node.json">
+{
+  "compilerOptions": {
+    "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.node.tsbuildinfo",
+    "target": "es2023",
+    "lib": ["ES2023"],
+    "types": ["node"],
+    "skipLibCheck": true,
+
+    /* Bundler mode */
+    "module": "nodenext",
+    "allowImportingTsExtensions": true,
+    "verbatimModuleSyntax": true,
+    "moduleDetection": "force",
+    "noEmit": true,
+
+    /* Linting */
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "erasableSyntaxOnly": true,
+    "noFallthroughCasesInSwitch": true
+  },
+  "include": ["vite.config.ts"]
+}
+</file>
+
+<file path="vite.config.ts">
+import { defineConfig } from 'vite';
+import react from '@vitejs/plugin-react';
+import tailwindcss from '@tailwindcss/vite';
+
+// https://vite.dev/config/
+export default defineConfig({
+  plugins: [react(), tailwindcss()],
+  server:{
+    host:true,
+    port:5173,
+    strictPort: true,
+    allowedHosts: true,
+  }
+});
+</file>
+
+<file path="src/pages/WaiterPOS.tsx">
+import React, { useState } from 'react';
+import { useLiveQuery } from 'dexie-react-hooks';
+import { db } from '../db/kibandaDB';
+import { requestSync } from '../db/sync';
+import { useAuth } from '../context/AuthContext';
+import type { Order, OrderItem, PaymentMethod } from '../types';
+import { Plus, Minus, Send, Clock, CheckCircle, ShoppingBag, Flame, ChefHat, Mail, MessageSquareText, X } from 'lucide-react';
+
+export const WaiterPOS: React.FC = () => {
+  const { currentUser } = useAuth();
+  
+  // Navigation tab for mobile view
+  const [activeTab, setActiveTab] = useState<'menu' | 'pending'>('menu');
+
+  // Live queries from Dexie DB
+  const recipes = useLiveQuery(() => db.recipes.toArray(), []);
+  const activeOrders = useLiveQuery(() => 
+    db.orders.where('payment_status').equals('active').reverse().toArray(), []
+  );
+
+  // Get unique list of dishes from recipe mappings
+  const dishes = Array.from(
+    new Map(recipes?.map((r) => [r.dish_name, r])).values()
+  );
+
+  // Cart state
+  const [cart, setCart] = useState<OrderItem[]>([]);
+
+  // Settlement / receipt drawer state for pending orders — only one drawer
+  // open per card at a time, independent of whichever kitchen_status the
+  // ticket is currently in.
+  const [activeDrawer, setActiveDrawer] = useState<{ orderId: string; mode: 'payment' | 'receipt' } | null>(null);
+  const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('cash');
+  const [mpesaCode, setMpesaCode] = useState('');
+  const [receiptChannel, setReceiptChannel] = useState<'email' | 'phone'>('email');
+  const [receiptContact, setReceiptContact] = useState('');
+
+  // Add dish to cart
+  const addToCart = (dishName: string, price: number) => {
+    setCart((prev) => {
+      const existing = prev.find((item) => item.dish_name === dishName);
+      if (existing) {
+        return prev.map((item) =>
+          item.dish_name === dishName
+            ? { ...item, quantity: item.quantity + 1 }
+            : item
+        );
+      }
+      return [...prev, { dish_name: dishName, quantity: 1, unit_price: price }];
+    });
+  };
+
+  // Adjust item quantity
+  const updateQuantity = (dishName: string, delta: number) => {
+    setCart((prev) =>
+      prev
+        .map((item) => {
+          if (item.dish_name === dishName) {
+            const newQty = item.quantity + delta;
+            return newQty > 0 ? { ...item, quantity: newQty } : null;
+          }
+          return item;
+        })
+        .filter(Boolean) as OrderItem[]
+    );
+  };
+
+  const totalAmount = cart.reduce((sum, item) => sum + item.unit_price * item.quantity, 0);
+
+  // Send Order to Kitchen (Strictly Active/Unpaid)
+  const handleSendToKitchen = async () => {
+    if (cart.length === 0 || !currentUser) return;
+
+    const newOrder = {
+      order_id: crypto.randomUUID(),
+      payment_status: 'active' as const,
+      kitchen_status: 'queued' as const,
+      items: cart,
+      total_amount: totalAmount,
+      placed_by_waiter_id: currentUser.user_id,
+      timestamp: new Date().toISOString(),
+      synced: false,
+    };
+
+    await db.orders.add(newOrder);
+    requestSync();
+
+    // Reset cart state after sending ticket
+    setCart([]);
+  };
+
+  // Settle Payment after the customer finishes eating
+  const handleConfirmSettlement = async (orderId: string) => {
+    await db.orders.update(orderId, {
+      payment_status: 'paid',
+      payment_method: paymentMethod,
+      mpesa_code: paymentMethod === 'mpesa' ? mpesaCode : undefined,
+      synced: false,
+    });
+    requestSync();
+
+    setActiveDrawer(null);
+    setMpesaCode('');
+    setPaymentMethod('cash');
+  };
+
+  // Build a plain-text receipt for a ticket
+  const buildReceiptText = (order: Order) => {
+    const lines = [
+      'GAROMAX BITES',
+      `Ticket #${order.order_id.slice(0, 6)}`,
+      new Date(order.timestamp).toLocaleString(),
+      '',
+      ...order.items.map(
+        (it) => `${it.quantity}x ${it.dish_name}  —  KES ${it.unit_price * it.quantity}`
+      ),
+      '',
+      `TOTAL: KES ${order.total_amount}`,
+      '',
+      'Thank you for dining with us!',
+    ];
+    return lines.join('\n');
+  };
+
+  // Send receipt — currently opens the customer's email client with a prefilled
+  // message (no backend needed). Swap this out for a Supabase edge function
+  // calling an email API (and, for phone, an SMS API like Africa's Talking)
+  // once you're ready to send receipts automatically without user interaction.
+  const handleSendReceipt = (order: Order) => {
+    if (!receiptContact.trim()) return;
+
+    if (receiptChannel === 'email') {
+      const subject = encodeURIComponent(`Garomax Bites Receipt — #${order.order_id.slice(0, 6)}`);
+      const body = encodeURIComponent(buildReceiptText(order));
+      window.location.href = `mailto:${receiptContact.trim()}?subject=${subject}&body=${body}`;
+    }
+
+    setActiveDrawer(null);
+    setReceiptContact('');
+    setReceiptChannel('email');
+  };
+
+  return (
+    <div className="pb-20 max-w-md mx-auto">
+      {/* PayRoller-Style Segmented Navigation Switcher */}
+      <div className="flex bg-[#0f1117] p-1 rounded-2xl border border-zinc-800/80 mb-5 shadow-lg">
+        <button
+          onClick={() => setActiveTab('menu')}
+          className={`flex-1 py-2.5 rounded-xl font-mono text-[11px] font-bold tracking-wider uppercase transition flex items-center justify-center gap-2 ${
+            activeTab === 'menu'
+              ? 'bg-orange-500 text-zinc-950 shadow-md shadow-orange-500/20'
+              : 'text-zinc-400 hover:text-white'
+          }`}
+        >
+          <ShoppingBag className="w-3.5 h-3.5" /> TAKE ORDER
+        </button>
+        <button
+          onClick={() => setActiveTab('pending')}
+          className={`flex-1 py-2.5 rounded-xl font-mono text-[11px] font-bold tracking-wider uppercase transition flex items-center justify-center gap-2 ${
+            activeTab === 'pending'
+              ? 'bg-orange-500 text-zinc-950 shadow-md shadow-orange-500/20'
+              : 'text-zinc-400 hover:text-white'
+          }`}
+        >
+          <Clock className="w-3.5 h-3.5" /> PENDING BILLS
+          {activeOrders && activeOrders.length > 0 && (
+            <span className="ml-1 bg-zinc-900 text-orange-400 border border-orange-500/30 font-mono text-[10px] px-1.5 py-0.2 rounded-full">
+              {activeOrders.length}
+            </span>
+          )}
+        </button>
+      </div>
+
+      {/* TAB 1: MENU & ORDER ENTRY */}
+      {activeTab === 'menu' && (
+        <div className="space-y-4">
+          {/* Menu Grid */}
+          <div className="grid grid-cols-2 gap-3">
+            {dishes.map((dish) => (
+              <button
+                key={dish.dish_name}
+                onClick={() => addToCart(dish.dish_name, dish.selling_price)}
+                className="group relative p-4 bg-[#0f1117] border border-zinc-800/80 hover:border-orange-500/50 rounded-2xl text-left transition-all active:scale-[0.98] shadow-md flex flex-col justify-between h-28 overflow-hidden"
+              >
+                {/* PayRoller Corner Accent */}
+                <div className="absolute top-1.5 left-1.5 w-1.5 h-1.5 border-t border-l border-zinc-700 group-hover:border-orange-500 transition-colors" />
+                <div className="absolute top-1.5 right-1.5 w-1.5 h-1.5 border-t border-r border-zinc-700 group-hover:border-orange-500 transition-colors" />
+
+                <span className="font-semibold text-white text-sm tracking-tight line-clamp-2 mt-1">
+                  {dish.dish_name}
+                </span>
+                <div className="flex justify-between items-end">
+                  <span className="text-orange-400 font-mono font-bold text-xs tracking-wider">
+                    KES {dish.selling_price}
+                  </span>
+                  <span className="text-[10px] font-mono text-zinc-500 uppercase tracking-widest">
+                    ADD +
+                  </span>
+                </div>
+              </button>
+            ))}
+          </div>
+
+          {/* Cart Tray (Appears when items are selected) */}
+          {cart.length > 0 && (
+            <div className="relative mt-6 bg-[#0f1117] border border-zinc-800/80 rounded-3xl p-4 shadow-2xl space-y-3">
+              {/* PayRoller Corner Accents */}
+              <div className="absolute top-2 left-2 w-2 h-2 border-t-2 border-l-2 border-orange-500/40" />
+              <div className="absolute top-2 right-2 w-2 h-2 border-t-2 border-r-2 border-orange-500/40" />
+
+              <div className="flex justify-between items-center pb-2 border-b border-zinc-800/80">
+                <span className="font-mono text-xs font-bold text-zinc-400 uppercase tracking-wider">
+                  ORDER SUMMARY
+                </span>
+                <button
+                  onClick={() => setCart([])}
+                  className="text-zinc-500 hover:text-red-400 font-mono text-[10px] uppercase tracking-wider"
+                >
+                  CLEAR
+                </button>
+              </div>
+
+              <div className="space-y-2 max-h-48 overflow-y-auto pr-1">
+                {cart.map((item) => (
+                  <div
+                    key={item.dish_name}
+                    className="flex items-center justify-between bg-zinc-900/60 p-2.5 rounded-xl border border-zinc-800/60"
+                  >
+                    <div>
+                      <p className="font-medium text-white text-xs">{item.dish_name}</p>
+                      <p className="text-[10px] text-zinc-400 font-mono">
+                        KES {item.unit_price * item.quantity}
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={() => updateQuantity(item.dish_name, -1)}
+                        className="p-1 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-300"
+                      >
+                        <Minus className="w-3 h-3" />
+                      </button>
+                      <span className="font-mono font-bold text-orange-400 text-xs w-4 text-center">
+                        {item.quantity}
+                      </span>
+                      <button
+                        onClick={() => addToCart(item.dish_name, item.unit_price)}
+                        className="p-1 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-300"
+                      >
+                        <Plus className="w-3 h-3" />
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              <div className="pt-2 border-t border-zinc-800/80 flex justify-between items-center">
+                <span className="text-zinc-400 font-mono text-xs uppercase tracking-wider">
+                  TOTAL AMOUNT
+                </span>
+                <span className="text-orange-400 font-mono font-bold text-base tracking-wider">
+                  KES {totalAmount}
+                </span>
+              </div>
+
+              {/* Action Button */}
+              <button
+                onClick={handleSendToKitchen}
+                className="w-full py-3.5 bg-orange-500 hover:bg-orange-400 active:scale-[0.98] text-zinc-950 font-mono font-bold uppercase tracking-wider text-xs rounded-2xl transition flex items-center justify-center gap-2 shadow-lg shadow-orange-500/20"
+              >
+                <Send className="w-4 h-4" /> SEND TICKET TO KITCHEN
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* TAB 2: PENDING UNPAID BILLS */}
+      {activeTab === 'pending' && (
+        <div className="space-y-3">
+          {!activeOrders || activeOrders.length === 0 ? (
+            <div className="relative text-center py-12 bg-[#0f1117] rounded-3xl border border-zinc-800/80 p-6 shadow-xl">
+              <CheckCircle className="w-10 h-10 text-orange-500 mx-auto mb-2 opacity-80" />
+              <p className="text-white font-mono font-bold text-xs uppercase tracking-wider">
+                ALL TABLES CLEARED
+              </p>
+              <p className="text-zinc-500 text-[11px] font-mono mt-1">NO ACTIVE UNPAID MEALS LOGGED</p>
+            </div>
+          ) : (
+            activeOrders.map((order) => {
+              const drawerMode = activeDrawer?.orderId === order.order_id ? activeDrawer.mode : null;
+              const isReady = order.kitchen_status === 'ready';
+
+              return (
+                <div
+                  key={order.order_id}
+                  className="relative bg-[#0f1117] border border-zinc-800/80 rounded-2xl p-4 shadow-xl space-y-3"
+                >
+                  {/* PayRoller Corner Accents */}
+                  <div className="absolute top-1.5 left-1.5 w-1.5 h-1.5 border-t border-l border-zinc-700" />
+                  <div className="absolute top-1.5 right-1.5 w-1.5 h-1.5 border-t border-r border-zinc-700" />
+
+                  <div className="flex justify-between items-center border-b border-zinc-800/80 pb-2">
+                    <span className="text-[10px] text-zinc-400 font-mono uppercase tracking-widest">
+                      TIME: {new Date(order.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                    </span>
+                    <span className="text-orange-400 font-bold font-mono text-sm tracking-wider">
+                      KES {order.total_amount}
+                    </span>
+                  </div>
+
+                  {/* Kitchen status — independent of payment, purely informational for the waiter */}
+                  <div
+                    className={`flex items-center gap-1.5 w-fit px-2 py-1 rounded-lg border font-mono text-[10px] font-bold uppercase tracking-wider ${
+                      isReady
+                        ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400'
+                        : 'bg-orange-500/10 border-orange-500/30 text-orange-400'
+                    }`}
+                  >
+                    {isReady ? <ChefHat className="w-3 h-3" /> : <Flame className="w-3 h-3 animate-pulse" />}
+                    {isReady ? 'Ready to Serve' : 'Cooking'}
+                  </div>
+
+                  <div className="text-xs text-zinc-300 space-y-1 font-sans">
+                    {order.items.map((it, idx) => (
+                      <div key={idx} className="flex justify-between">
+                        <span className="font-medium text-zinc-200">
+                          {it.quantity}x {it.dish_name}
+                        </span>
+                        <span className="text-zinc-500 font-mono text-xs">
+                          KES {it.unit_price * it.quantity}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+
+                  {/* Settle Payment Drawer */}
+                  {drawerMode === 'payment' && (
+                    <div className="pt-3 border-t border-zinc-800/80 space-y-3 bg-zinc-900/80 p-3 rounded-xl">
+                      <p className="text-[11px] font-mono font-bold text-zinc-300 uppercase tracking-wider">
+                        SELECT PAYMENT METHOD:
+                      </p>
+                      <div className="grid grid-cols-2 gap-2">
+                        <button
+                          onClick={() => setPaymentMethod('cash')}
+                          className={`py-2 text-xs font-mono font-bold uppercase tracking-wider rounded-xl border transition ${
+                            paymentMethod === 'cash'
+                              ? 'bg-orange-500 text-zinc-950 border-orange-400'
+                              : 'bg-zinc-800 text-zinc-400 border-zinc-700'
+                          }`}
+                        >
+                          CASH
+                        </button>
+                        <button
+                          onClick={() => setPaymentMethod('mpesa')}
+                          className={`py-2 text-xs font-mono font-bold uppercase tracking-wider rounded-xl border transition ${
+                            paymentMethod === 'mpesa'
+                              ? 'bg-orange-500 text-zinc-950 border-orange-400'
+                              : 'bg-zinc-800 text-zinc-400 border-zinc-700'
+                          }`}
+                        >
+                          M-PESA
+                        </button>
+                      </div>
+
+                      {paymentMethod === 'mpesa' && (
+                        <input
+                          type="text"
+                          placeholder="M-PESA TRANSACTION CODE"
+                          value={mpesaCode}
+                          onChange={(e) => setMpesaCode(e.target.value.toUpperCase())}
+                          className="w-full bg-zinc-950 border border-zinc-700 rounded-xl px-3 py-2 text-xs text-white uppercase font-mono tracking-wider focus:outline-none focus:border-orange-500"
+                        />
+                      )}
+
+                      <div className="flex gap-2 pt-1">
+                        <button
+                          onClick={() => setActiveDrawer(null)}
+                          className="flex-1 py-2 bg-zinc-800 text-zinc-400 rounded-xl font-mono text-[11px] font-bold uppercase tracking-wider"
+                        >
+                          CANCEL
+                        </button>
+                        <button
+                          onClick={() => handleConfirmSettlement(order.order_id)}
+                          className="flex-1 py-2 bg-orange-500 text-zinc-950 rounded-xl font-mono text-[11px] font-bold uppercase tracking-wider shadow-lg shadow-orange-500/20"
+                        >
+                          CONFIRM PAID
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Send Receipt Drawer */}
+                  {drawerMode === 'receipt' && (
+                    <div className="pt-3 border-t border-zinc-800/80 space-y-3 bg-zinc-900/80 p-3 rounded-xl">
+                      <div className="flex items-center justify-between">
+                        <p className="text-[11px] font-mono font-bold text-zinc-300 uppercase tracking-wider">
+                          SEND RECEIPT VIA:
+                        </p>
+                        <button
+                          onClick={() => {
+                            setActiveDrawer(null);
+                            setReceiptContact('');
+                          }}
+                          className="text-zinc-500 hover:text-white"
+                        >
+                          <X className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-2">
+                        <button
+                          onClick={() => setReceiptChannel('email')}
+                          className={`py-2 text-xs font-mono font-bold uppercase tracking-wider rounded-xl border transition flex items-center justify-center gap-1.5 ${
+                            receiptChannel === 'email'
+                              ? 'bg-orange-500 text-zinc-950 border-orange-400'
+                              : 'bg-zinc-800 text-zinc-400 border-zinc-700'
+                          }`}
+                        >
+                          <Mail className="w-3.5 h-3.5" /> EMAIL
+                        </button>
+                        <button
+                          disabled
+                          title="Coming soon — SMS receipts"
+                          className="py-2 text-xs font-mono font-bold uppercase tracking-wider rounded-xl border bg-zinc-900 text-zinc-600 border-zinc-800 flex items-center justify-center gap-1.5 cursor-not-allowed"
+                        >
+                          <MessageSquareText className="w-3.5 h-3.5" /> SMS SOON
+                        </button>
+                      </div>
+
+                      <input
+                        type="email"
+                        placeholder="customer@email.com"
+                        value={receiptContact}
+                        onChange={(e) => setReceiptContact(e.target.value)}
+                        className="w-full bg-zinc-950 border border-zinc-700 rounded-xl px-3 py-2 text-xs text-white font-mono tracking-wide focus:outline-none focus:border-orange-500"
+                      />
+
+                      <button
+                        onClick={() => handleSendReceipt(order)}
+                        disabled={!receiptContact.trim()}
+                        className="w-full py-2.5 bg-orange-500 hover:bg-orange-400 disabled:opacity-40 disabled:pointer-events-none text-zinc-950 rounded-xl font-mono text-[11px] font-bold uppercase tracking-wider shadow-lg shadow-orange-500/20 flex items-center justify-center gap-1.5"
+                      >
+                        <Send className="w-3.5 h-3.5" /> SEND RECEIPT
+                      </button>
+                    </div>
+                  )}
+
+                  {/* Action Buttons */}
+                  {!drawerMode && (
+                    <div className="grid grid-cols-2 gap-2">
+                      <button
+                        onClick={() => setActiveDrawer({ orderId: order.order_id, mode: 'receipt' })}
+                        className="py-2.5 bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 text-zinc-300 font-mono font-bold uppercase tracking-wider rounded-xl text-xs transition flex items-center justify-center gap-1.5"
+                      >
+                        <Mail className="w-3.5 h-3.5" /> RECEIPT
+                      </button>
+                      <button
+                        onClick={() => setActiveDrawer({ orderId: order.order_id, mode: 'payment' })}
+                        className="py-2.5 bg-orange-500/10 hover:bg-orange-500/20 border border-orange-500/30 text-orange-400 font-mono font-bold uppercase tracking-wider rounded-xl text-xs transition"
+                      >
+                        COLLECT & CLOSE
+                      </button>
+                    </div>
+                  )}
+                </div>
+              );
+            })
+          )}
+        </div>
+      )}
+    </div>
+  );
+};
+</file>
+
+<file path="src/App.tsx">
+import React from 'react';
+import { AuthProvider, useAuth } from './context/AuthContext';
+import { Login } from './pages/Login';
+import { WaiterPOS } from './pages/WaiterPOS';
+import { KitchenDisplay } from './pages/KitchenDisplay';
+import { AdminDashboard } from './pages/AdminDashboard';
+import { LogOut, Cloud, CloudOff, RefreshCw, AlertTriangle } from 'lucide-react';
+import { useSyncStatus } from './hooks/useSyncStatus';
+
+const SyncBadge: React.FC = () => {
+  const { status, configured } = useSyncStatus();
+
+  if (!configured) {
+    return (
+      <div
+        title="Supabase not configured — running local-only, this device won't see other terminals"
+        className="flex items-center gap-1 text-zinc-500 bg-zinc-900/80 px-2 py-1.5 rounded-lg border border-zinc-800/80"
+      >
+        <CloudOff className="w-3.5 h-3.5" />
+      </div>
+    );
+  }
+
+  const config = {
+    offline: { icon: CloudOff, color: 'text-zinc-500', label: 'Offline — changes saved locally' },
+    syncing: { icon: RefreshCw, color: 'text-orange-400 animate-spin', label: 'Syncing…' },
+    synced: { icon: Cloud, color: 'text-emerald-400', label: 'Synced' },
+    error: { icon: AlertTriangle, color: 'text-red-400', label: 'Sync error — retrying' },
+  }[status];
+
+  const Icon = config.icon;
+
+  return (
+    <div
+      title={config.label}
+      className="flex items-center gap-1 bg-zinc-900/80 px-2 py-1.5 rounded-lg border border-zinc-800/80"
+    >
+      <Icon className={`w-3.5 h-3.5 ${config.color}`} />
+    </div>
+  );
+};
+
+const DashboardSwitch: React.FC = () => {
+  const { currentUser, logout } = useAuth();
+
+  if (!currentUser) {
+    return <Login />;
+  }
+
+  return (
+    <div className="min-h-screen bg-[#090a0f] text-zinc-100 font-sans selection:bg-orange-500 selection:text-white">
+      {/* PayRoller-Inspired Minimal Dark Header */}
+      <header className="bg-[#0f1117]/90 backdrop-blur-md border-b border-zinc-800/80 px-4 py-3 sticky top-0 z-50">
+        <div className="max-w-md mx-auto flex items-center justify-between">
+          {/* Logo Brand */}
+          <div className="flex items-center space-x-2">
+            <div>
+              <div className="flex items-center gap-1.5">
+                <span className="font-extrabold text-white text-base tracking-wider uppercase font-mono">
+                  GAROMAX
+                </span>
+                <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-mono font-bold bg-orange-500/10 text-orange-400 border border-orange-500/20 uppercase tracking-widest">
+                  {currentUser.role}
+                </span>
+              </div>
+            </div>
+          </div>
+
+          {/* User Profile, Sync Status & Logout */}
+          <div className="flex items-center gap-2">
+            <SyncBadge />
+            <div className="flex items-center text-xs text-zinc-300 font-mono bg-zinc-900/80 px-2.5 py-1.5 rounded-xl border border-zinc-800/80">
+              <span className="w-1.5 h-1.5 rounded-full bg-orange-500 mr-2 animate-pulse" />
+              <span className="truncate max-w-[100px] font-medium">{currentUser.name}</span>
+            </div>
+            <button
+              onClick={logout}
+              className="p-1.5 rounded-xl bg-zinc-900 hover:bg-zinc-800 text-zinc-400 hover:text-white transition active:scale-95 border border-zinc-800"
+              title="Log Out"
+            >
+              <LogOut className="w-4 h-4" />
+            </button>
+          </div>
+        </div>
+      </header>
+
+      {/* Main Content Area */}
+      <main className="p-4 max-w-md mx-auto">
+        {currentUser.role === 'waiter' && <WaiterPOS />}
+
+        {currentUser.role === 'cook' && <KitchenDisplay/>}
+
+        {currentUser.role === 'admin' && <AdminDashboard />}
+      </main>
+    </div>
+  );
+};
+
+export default function App() {
+  return (
+    <AuthProvider>
+      <DashboardSwitch />
+    </AuthProvider>
+  );
+}
+</file>
+
+<file path="README.md">
+# React + TypeScript + Vite
+
+This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+
+Currently, two official plugins are available:
+
+- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
+- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+
+## React Compiler
+
+The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+
+## Expanding the ESLint configuration
+
+If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
+
+```js
+export default defineConfig([
+  globalIgnores(['dist']),
+  {
+    files: ['**/*.{ts,tsx}'],
+    extends: [
+      // Other configs...
+
+      // Remove tseslint.configs.recommended and replace with this
+      tseslint.configs.recommendedTypeChecked,
+      // Alternatively, use this for stricter rules
+      tseslint.configs.strictTypeChecked,
+      // Optionally, add this for stylistic rules
+      tseslint.configs.stylisticTypeChecked,
+
+      // Other configs...
+    ],
+    languageOptions: {
+      parserOptions: {
+        project: ['./tsconfig.node.json', './tsconfig.app.json'],
+        tsconfigRootDir: import.meta.dirname,
+      },
+      // other options...
+    },
+  },
+])
+
+```
+
+You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
+
+```js
+// eslint.config.js
+import reactX from 'eslint-plugin-react-x'
+import reactDom from 'eslint-plugin-react-dom'
+
+export default defineConfig([
+  globalIgnores(['dist']),
+  {
+    files: ['**/*.{ts,tsx}'],
+    extends: [
+      // Other configs...
+      // Enable lint rules for React
+      reactX.configs['recommended-typescript'],
+      // Enable lint rules for React DOM
+      reactDom.configs.recommended,
+    ],
+    languageOptions: {
+      parserOptions: {
+        project: ['./tsconfig.node.json', './tsconfig.app.json'],
+        tsconfigRootDir: import.meta.dirname,
+      },
+      // other options...
+    },
+  },
+])
+
+```
+</file>
+
+</files>

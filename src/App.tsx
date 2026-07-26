@@ -4,7 +4,41 @@ import { Login } from './pages/Login';
 import { WaiterPOS } from './pages/WaiterPOS';
 import { KitchenDisplay } from './pages/KitchenDisplay';
 import { AdminDashboard } from './pages/AdminDashboard';
-import { LogOut } from 'lucide-react';
+import { LogOut, Cloud, CloudOff, RefreshCw, AlertTriangle } from 'lucide-react';
+import { useSyncStatus } from './hooks/useSyncStatus';
+
+const SyncBadge: React.FC = () => {
+  const { status, configured } = useSyncStatus();
+
+  if (!configured) {
+    return (
+      <div
+        title="Supabase not configured — running local-only, this device won't see other terminals"
+        className="flex items-center gap-1 text-zinc-500 bg-zinc-900/80 px-2 py-1.5 rounded-lg border border-zinc-800/80"
+      >
+        <CloudOff className="w-3.5 h-3.5" />
+      </div>
+    );
+  }
+
+  const config = {
+    offline: { icon: CloudOff, color: 'text-zinc-500', label: 'Offline — changes saved locally' },
+    syncing: { icon: RefreshCw, color: 'text-orange-400 animate-spin', label: 'Syncing…' },
+    synced: { icon: Cloud, color: 'text-emerald-400', label: 'Synced' },
+    error: { icon: AlertTriangle, color: 'text-red-400', label: 'Sync error — retrying' },
+  }[status];
+
+  const Icon = config.icon;
+
+  return (
+    <div
+      title={config.label}
+      className="flex items-center gap-1 bg-zinc-900/80 px-2 py-1.5 rounded-lg border border-zinc-800/80"
+    >
+      <Icon className={`w-3.5 h-3.5 ${config.color}`} />
+    </div>
+  );
+};
 
 const DashboardSwitch: React.FC = () => {
   const { currentUser, logout } = useAuth();
@@ -32,8 +66,9 @@ const DashboardSwitch: React.FC = () => {
             </div>
           </div>
 
-          {/* User Profile & Logout */}
+          {/* User Profile, Sync Status & Logout */}
           <div className="flex items-center gap-2">
+            <SyncBadge />
             <div className="flex items-center text-xs text-zinc-300 font-mono bg-zinc-900/80 px-2.5 py-1.5 rounded-xl border border-zinc-800/80">
               <span className="w-1.5 h-1.5 rounded-full bg-orange-500 mr-2 animate-pulse" />
               <span className="truncate max-w-[100px] font-medium">{currentUser.name}</span>
