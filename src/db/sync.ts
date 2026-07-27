@@ -143,6 +143,7 @@ const userFromRow = (r: any): User => ({
   pin_code: r.pin_code,
   active_shift: r.active_shift,
   basic_salary: r.basic_salary ?? 0,
+  synced: true,
 });
 
 const recipeToRow = (r: RecipeItem) => ({
@@ -158,6 +159,7 @@ const recipeFromRow = (r: any): RecipeItem => ({
   ingredient_id: r.ingredient_id,
   selling_price: r.selling_price,
   quantity_per_plate: r.quantity_per_plate,
+  synced: true,
 });
 
 // ---------------------------------------------------------------------------
@@ -198,21 +200,28 @@ async function pushUnsyncedIngredients() {
   );
 }
 
-// Users and recipes are seeded/admin-managed and have no `synced` flag yet —
-// push everything currently held locally so a fresh install "claims" its
-// seed data in Supabase. Safe to call repeatedly (upsert is idempotent), and
-// cheap since these tables are small (a handful of staff, a few dozen recipe
-// rows), so we just do it on every sync pass rather than tracking dirtiness.
-async function pushAllUsersAndRecipes() {
-  const users = await db.users.toArray();
-  const recipes = await db.recipes.toArray();
-  if (users.length) {
-    const { error } = await supabase.from('users').upsert(users.map(userToRow));
-    if (error) throw error;
-  }
-  if (recipes.length) {
-    const { error } = await supabase.from('recipes').upsert(recipes.map(recipeToRow));
-    if (error) throw error;
+// NEW: Push unsynced users only (instead of all users)
+async function pushUnsyncedUsers() {
+  const rows = await db.users.filter((u) => u.synced === false).toArray();
+  if (rows.length === 0) return;
+  const { error } = await supabase.from('users').upsert(rows.map(userToRow));
+  if (error) throw error;
+  await db.users.bulkUpdate(rows.map((r) => ({ key: r.user_id, changes: { synced: true } })));
+}
+
+// NEW: Push unsynced recipes only
+// Note: Recipes have a composite key, so we handle them differently.
+// We'll push them and then re-pull to ensure we have the correct state.
+async function pushUnsyncedRecipes() {
+  const rows = await db.recipes.filter((r) => r.synced === false).toArray();
+  if (rows.length === 0) return;
+  const { error } = await supabase.from('recipes').upsert(rows.map(recipeToRow));
+  if (error) throw error;
+  // For composite keys, we can't easily bulkUpdate, so we mark them synced by re-pulling
+  // This is safe because recipes are small (a few dozen rows max)
+  const { data: pulledRecipes } = await supabase.from('recipes').select('*');
+  if (pulledRecipes) {
+    await db.recipes.bulkPut(pulledRecipes.map(recipeFromRow));
   }
 }
 
@@ -224,7 +233,8 @@ export async function pushAll() {
     pushUnsyncedWaste(),
     pushUnsyncedLedgers(),
     pushUnsyncedIngredients(),
-    pushAllUsersAndRecipes(),
+    pushUnsyncedUsers(),
+    pushUnsyncedRecipes(),
   ]);
 }
 
@@ -378,7 +388,8 @@ export async function startSync() {
 
   try {
     setStatus('syncing');
-    await pushAllUsersAndRecipes();
+    // Initial sync: push everything then pull everything
+    await pushAll();
     await pullAll();
     lastSync = new Date();
     setStatus('synced');

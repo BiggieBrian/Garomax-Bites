@@ -7,6 +7,7 @@ export interface User {
   pin_code: string;
   active_shift: boolean;
   basic_salary: number;
+  synced?: boolean;  // <-- ADD THIS
 }
 
 export interface Ingredient {
@@ -24,6 +25,7 @@ export interface RecipeItem {
   selling_price: number;
   ingredient_id: string;
   quantity_per_plate: number;
+  synced?: boolean;  // <-- ADD THIS
 }
 
 export type PaymentStatus = 'active' | 'paid' | 'credit' | 'unpaid_loss';
