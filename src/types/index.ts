@@ -6,6 +6,7 @@ export interface User {
   role: UserRole;
   pin_code: string;
   active_shift: boolean;
+  basic_salary: number;
 }
 
 export interface Ingredient {

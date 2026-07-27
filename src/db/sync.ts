@@ -132,6 +132,7 @@ const userToRow = (u: User) => ({
   role: u.role,
   pin_code: u.pin_code,
   active_shift: u.active_shift,
+  basic_salary: u.basic_salary,
 });
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -141,6 +142,7 @@ const userFromRow = (r: any): User => ({
   role: r.role,
   pin_code: r.pin_code,
   active_shift: r.active_shift,
+  basic_salary: r.basic_salary ?? 0,
 });
 
 const recipeToRow = (r: RecipeItem) => ({

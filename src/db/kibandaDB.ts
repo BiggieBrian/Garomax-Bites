@@ -34,6 +34,18 @@ export class KibandaDatabase extends Dexie {
         }
       });
     });
+
+    // v3: staff now have a basic salary so payroll can be computed
+    // automatically instead of an admin doing the maths by hand.
+    this.version(3).stores({
+      users: 'user_id, pin_code, role',
+    }).upgrade(async (tx) => {
+      await tx.table('users').toCollection().modify((user) => {
+        if (user.basic_salary === undefined) {
+          user.basic_salary = 0;
+        }
+      });
+    });
   }
 }
 

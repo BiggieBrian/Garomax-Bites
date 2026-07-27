@@ -8,6 +8,8 @@ import {
   deleteRecipeLineRemote,
 } from '../db/sync';
 import type { Ingredient, RecipeItem } from '../types';
+import { Pagination } from '../components/Pagination';
+import { usePagination } from '../components/usePagination';
 import {
   Package,
   UtensilsCrossed,
@@ -236,6 +238,20 @@ export const StockMenuManager: React.FC = () => {
     setNewLineQty('');
   };
 
+  const {
+    page: ingredientsPage,
+    setPage: setIngredientsPage,
+    totalPages: ingredientsTotalPages,
+    pageItems: pagedIngredients,
+  } = usePagination(ingredients ?? [], 5);
+
+  const {
+    page: dishesPage,
+    setPage: setDishesPage,
+    totalPages: dishesTotalPages,
+    pageItems: pagedDishes,
+  } = usePagination(dishes, 4);
+
   return (
     <div className="space-y-5">
       {/* ===================== INGREDIENTS ===================== */}
@@ -255,75 +271,78 @@ export const StockMenuManager: React.FC = () => {
           </button>
         </div>
 
-        <div className="space-y-2 max-h-72 overflow-y-auto pr-1">
+        <div className="space-y-2">
           {(ingredients ?? []).length === 0 ? (
             <p className="text-zinc-600 text-[11px] font-mono text-center py-6">No ingredients yet</p>
           ) : (
-            ingredients?.map((ing) => {
-              const isLow = ing.quantity_on_hand <= ing.low_stock_threshold;
-              const usedIn = ingredientUsage.get(ing.ingredient_id) ?? 0;
-              const isConfirmingDelete = confirmDeleteIngredient === ing.ingredient_id;
+            <>
+              {pagedIngredients.map((ing) => {
+                const isLow = ing.quantity_on_hand <= ing.low_stock_threshold;
+                const usedIn = ingredientUsage.get(ing.ingredient_id) ?? 0;
+                const isConfirmingDelete = confirmDeleteIngredient === ing.ingredient_id;
 
-              return (
-                <div
-                  key={ing.ingredient_id}
-                  className={`p-2.5 rounded-xl border ${
-                    isLow ? 'bg-red-500/5 border-red-500/20' : 'bg-zinc-900/60 border-zinc-800/60'
-                  }`}
-                >
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <p className="text-xs font-medium text-white">{ing.name}</p>
-                      <p className="text-[10px] font-mono text-zinc-500">
-                        {ing.quantity_on_hand} {ing.unit} on hand · {money(ing.last_purchase_cost)}/{ing.unit}
-                      </p>
-                    </div>
-                    <div className="flex items-center gap-1.5">
-                      {isLow && <AlertTriangle className="w-3.5 h-3.5 text-red-400" />}
-                      <button
-                        onClick={() => setRestockTarget(ing)}
-                        title="Restock"
-                        className="p-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-300"
-                      >
-                        <PackagePlus className="w-3.5 h-3.5" />
-                      </button>
-                      <button
-                        onClick={() => setConfirmDeleteIngredient(ing.ingredient_id)}
-                        title="Delete"
-                        className="p-1.5 rounded-lg bg-zinc-800 hover:bg-red-500/20 text-zinc-400 hover:text-red-400"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </button>
-                    </div>
-                  </div>
-
-                  {isConfirmingDelete && (
-                    <div className="mt-2 pt-2 border-t border-zinc-800/60">
-                      {usedIn > 0 ? (
-                        <p className="text-[10px] font-mono text-red-400">
-                          Used in {usedIn} dish{usedIn > 1 ? 'es' : ''} — remove it from those recipes first.
+                return (
+                  <div
+                    key={ing.ingredient_id}
+                    className={`p-2.5 rounded-xl border ${
+                      isLow ? 'bg-red-500/5 border-red-500/20' : 'bg-zinc-900/60 border-zinc-800/60'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <p className="text-xs font-medium text-white">{ing.name}</p>
+                        <p className="text-[10px] font-mono text-zinc-500">
+                          {ing.quantity_on_hand} {ing.unit} on hand · {money(ing.last_purchase_cost)}/{ing.unit}
                         </p>
-                      ) : (
-                        <div className="flex gap-2">
-                          <button
-                            onClick={() => setConfirmDeleteIngredient(null)}
-                            className="flex-1 py-1.5 bg-zinc-800 text-zinc-400 rounded-lg font-mono text-[10px] font-bold uppercase"
-                          >
-                            Cancel
-                          </button>
-                          <button
-                            onClick={() => handleDeleteIngredient(ing.ingredient_id)}
-                            className="flex-1 py-1.5 bg-red-500/20 text-red-400 border border-red-500/30 rounded-lg font-mono text-[10px] font-bold uppercase"
-                          >
-                            Confirm Delete
-                          </button>
-                        </div>
-                      )}
+                      </div>
+                      <div className="flex items-center gap-1.5">
+                        {isLow && <AlertTriangle className="w-3.5 h-3.5 text-red-400" />}
+                        <button
+                          onClick={() => setRestockTarget(ing)}
+                          title="Restock"
+                          className="p-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-300"
+                        >
+                          <PackagePlus className="w-3.5 h-3.5" />
+                        </button>
+                        <button
+                          onClick={() => setConfirmDeleteIngredient(ing.ingredient_id)}
+                          title="Delete"
+                          className="p-1.5 rounded-lg bg-zinc-800 hover:bg-red-500/20 text-zinc-400 hover:text-red-400"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
                     </div>
-                  )}
-                </div>
-              );
-            })
+
+                    {isConfirmingDelete && (
+                      <div className="mt-2 pt-2 border-t border-zinc-800/60">
+                        {usedIn > 0 ? (
+                          <p className="text-[10px] font-mono text-red-400">
+                            Used in {usedIn} dish{usedIn > 1 ? 'es' : ''} — remove it from those recipes first.
+                          </p>
+                        ) : (
+                          <div className="flex gap-2">
+                            <button
+                              onClick={() => setConfirmDeleteIngredient(null)}
+                              className="flex-1 py-1.5 bg-zinc-800 text-zinc-400 rounded-lg font-mono text-[10px] font-bold uppercase"
+                            >
+                              Cancel
+                            </button>
+                            <button
+                              onClick={() => handleDeleteIngredient(ing.ingredient_id)}
+                              className="flex-1 py-1.5 bg-red-500/20 text-red-400 border border-red-500/30 rounded-lg font-mono text-[10px] font-bold uppercase"
+                            >
+                              Confirm Delete
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+              <Pagination page={ingredientsPage} totalPages={ingredientsTotalPages} onPageChange={setIngredientsPage} />
+            </>
           )}
         </div>
       </div>
@@ -354,7 +373,7 @@ export const StockMenuManager: React.FC = () => {
           {dishes.length === 0 ? (
             <p className="text-zinc-600 text-[11px] font-mono text-center py-6">No dishes yet</p>
           ) : (
-            dishes.map((dish) => {
+            pagedDishes.map((dish) => {
               const isEditingPrice = editingPriceDish === dish.dish_name;
               const isConfirmingDelete = confirmDeleteDish === dish.dish_name;
               const isAddingLine = addingLineTo === dish.dish_name;
@@ -499,6 +518,9 @@ export const StockMenuManager: React.FC = () => {
             })
           )}
         </div>
+        {dishes.length > 0 && (
+          <Pagination page={dishesPage} totalPages={dishesTotalPages} onPageChange={setDishesPage} />
+        )}
       </div>
 
       {/* Add Ingredient Modal */}

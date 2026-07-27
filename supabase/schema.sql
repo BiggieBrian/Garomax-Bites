@@ -6,7 +6,8 @@ create table if not exists users (
   name text not null,
   role text not null check (role in ('admin', 'cook', 'waiter')),
   pin_code text not null,
-  active_shift boolean not null default true
+  active_shift boolean not null default true,
+  basic_salary numeric not null default 0
 );
 
 create table if not exists ingredients (

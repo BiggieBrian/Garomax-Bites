@@ -5,9 +5,9 @@ export async function seedInitialData() {
   if (userCount === 0) {
     // Seed default staff
     await db.users.bulkAdd([
-      { user_id: '1', name: 'Garomax Owner', role: 'admin', pin_code: '0000', active_shift: true },
-      { user_id: '2', name: 'Chef James', role: 'cook', pin_code: '1111', active_shift: true },
-      { user_id: '3', name: 'Waitstaff Mary', role: 'waiter', pin_code: '2222', active_shift: true },
+      { user_id: '1', name: 'Garomax Owner', role: 'admin', pin_code: '0000', active_shift: true, basic_salary: 0 },
+      { user_id: '2', name: 'Chef James', role: 'cook', pin_code: '1111', active_shift: true, basic_salary: 15000 },
+      { user_id: '3', name: 'Waitstaff Mary', role: 'waiter', pin_code: '2222', active_shift: true, basic_salary: 12000 },
     ]);
 
     // Seed default ingredients
