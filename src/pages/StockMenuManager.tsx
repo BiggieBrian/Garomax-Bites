@@ -10,6 +10,7 @@ import {
 import type { Ingredient, RecipeItem } from '../types';
 import { Pagination } from '../components/Pagination';
 import { usePagination } from '../components/usePagination';
+import { SearchInput } from '../components/SearchInput';
 import {
   Package,
   UtensilsCrossed,
@@ -238,19 +239,32 @@ export const StockMenuManager: React.FC = () => {
     setNewLineQty('');
   };
 
+  const [ingredientSearch, setIngredientSearch] = useState('');
+  const searchedIngredients = useMemo(() => {
+    const q = ingredientSearch.trim().toLowerCase();
+    const list = ingredients ?? [];
+    return q ? list.filter((i) => i.name.toLowerCase().includes(q)) : list;
+  }, [ingredients, ingredientSearch]);
+
   const {
     page: ingredientsPage,
     setPage: setIngredientsPage,
     totalPages: ingredientsTotalPages,
     pageItems: pagedIngredients,
-  } = usePagination(ingredients ?? [], 5);
+  } = usePagination(searchedIngredients, 5);
+
+  const [dishSearch, setDishSearch] = useState('');
+  const searchedDishes = useMemo(() => {
+    const q = dishSearch.trim().toLowerCase();
+    return q ? dishes.filter((d) => d.dish_name.toLowerCase().includes(q)) : dishes;
+  }, [dishes, dishSearch]);
 
   const {
     page: dishesPage,
     setPage: setDishesPage,
     totalPages: dishesTotalPages,
     pageItems: pagedDishes,
-  } = usePagination(dishes, 4);
+  } = usePagination(searchedDishes, 4);
 
   return (
     <div className="space-y-5">
@@ -276,6 +290,14 @@ export const StockMenuManager: React.FC = () => {
             <p className="text-zinc-600 text-[11px] font-mono text-center py-6">No ingredients yet</p>
           ) : (
             <>
+              <SearchInput
+                value={ingredientSearch}
+                onChange={(v) => { setIngredientSearch(v); setIngredientsPage(1); }}
+                placeholder="Search ingredients..."
+              />
+              {searchedIngredients.length === 0 && (
+                <p className="text-zinc-600 text-[11px] font-mono text-center py-6">No ingredients match your search</p>
+              )}
               {pagedIngredients.map((ing) => {
                 const isLow = ing.quantity_on_hand <= ing.low_stock_threshold;
                 const usedIn = ingredientUsage.get(ing.ingredient_id) ?? 0;
@@ -373,7 +395,16 @@ export const StockMenuManager: React.FC = () => {
           {dishes.length === 0 ? (
             <p className="text-zinc-600 text-[11px] font-mono text-center py-6">No dishes yet</p>
           ) : (
-            pagedDishes.map((dish) => {
+            <>
+              <SearchInput
+                value={dishSearch}
+                onChange={(v) => { setDishSearch(v); setDishesPage(1); }}
+                placeholder="Search dishes..."
+              />
+              {searchedDishes.length === 0 && (
+                <p className="text-zinc-600 text-[11px] font-mono text-center py-6">No dishes match your search</p>
+              )}
+              {pagedDishes.map((dish) => {
               const isEditingPrice = editingPriceDish === dish.dish_name;
               const isConfirmingDelete = confirmDeleteDish === dish.dish_name;
               const isAddingLine = addingLineTo === dish.dish_name;
@@ -515,7 +546,8 @@ export const StockMenuManager: React.FC = () => {
                   )}
                 </div>
               );
-            })
+            })}
+            </>
           )}
         </div>
         {dishes.length > 0 && (

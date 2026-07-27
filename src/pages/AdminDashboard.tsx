@@ -6,6 +6,7 @@ import { useAuth } from '../context/AuthContext';
 import { StockMenuManager } from './StockMenuManager';
 import { Pagination } from '../components/Pagination';
 import { usePagination } from '../components/usePagination';
+import { SearchInput } from '../components/SearchInput';
 import type { StaffLedger, User, UserRole } from '../types';
 import {
   ClipboardList,
@@ -84,8 +85,14 @@ export const AdminDashboard: React.FC = () => {
     return { revenue, orderCount, avgTicket, paymentSplit, itemsSold, unsettledValue, unsettledCount: unsettled.length, creditValue, lossValue };
   }, [orders]);
 
+  const [itemsSearch, setItemsSearch] = useState('');
+  const searchedItemsSold = useMemo(() => {
+    const q = itemsSearch.trim().toLowerCase();
+    return q ? sales.itemsSold.filter((it) => it.dish_name.toLowerCase().includes(q)) : sales.itemsSold;
+  }, [sales.itemsSold, itemsSearch]);
+
   const { page: itemsPage, setPage: setItemsPage, totalPages: itemsTotalPages, pageItems: pagedItemsSold } =
-    usePagination(sales.itemsSold, 5);
+    usePagination(searchedItemsSold, 5);
 
   // ---------------------------------------------------------------------
   // Stock overview
@@ -226,8 +233,15 @@ export const AdminDashboard: React.FC = () => {
     setEditingStaff(null);
   };
 
+  const [staffSearch, setStaffSearch] = useState('');
+  const searchedStaff = useMemo(() => {
+    const q = staffSearch.trim().toLowerCase();
+    const list = staff ?? [];
+    return q ? list.filter((s) => s.name.toLowerCase().includes(q)) : list;
+  }, [staff, staffSearch]);
+
   const { page: staffPage, setPage: setStaffPage, totalPages: staffTotalPages, pageItems: pagedStaff } =
-    usePagination(staff ?? [], 5);
+    usePagination(searchedStaff, 5);
 
   // ---------------------------------------------------------------------
   // Payroll ledger (existing) — now a secondary section
@@ -243,12 +257,22 @@ export const AdminDashboard: React.FC = () => {
     (l) => filter === 'all' || l.payroll_deduction_status === filter
   );
 
+  const [ledgerSearch, setLedgerSearch] = useState('');
+  const searchedLedgers = useMemo(() => {
+    const q = ledgerSearch.trim().toLowerCase();
+    if (!q) return filteredLedgers;
+    return filteredLedgers.filter((l) => {
+      const name = staffMap.get(l.staff_id)?.name?.toLowerCase() ?? '';
+      return name.includes(q) || l.reason.toLowerCase().includes(q);
+    });
+  }, [filteredLedgers, ledgerSearch, staffMap]);
+
   const {
     page: ledgerPage,
     setPage: setLedgerPage,
     totalPages: ledgerTotalPages,
     pageItems: pagedLedgers,
-  } = usePagination(filteredLedgers, 4);
+  } = usePagination(searchedLedgers, 4);
 
   const changeFilter = (f: typeof filter) => {
     setFilter(f);
@@ -315,12 +339,22 @@ export const AdminDashboard: React.FC = () => {
     .filter((o) => o.payment_status === 'credit')
     .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
 
+  const [creditSearch, setCreditSearch] = useState('');
+  const searchedCreditOrders = useMemo(() => {
+    const q = creditSearch.trim().toLowerCase();
+    if (!q) return creditOrders;
+    return creditOrders.filter((o) => {
+      const waiterName = staffMap.get(o.placed_by_waiter_id)?.name?.toLowerCase() ?? '';
+      return waiterName.includes(q) || o.order_id.toLowerCase().includes(q);
+    });
+  }, [creditOrders, creditSearch, staffMap]);
+
   const {
     page: creditPage,
     setPage: setCreditPage,
     totalPages: creditTotalPages,
     pageItems: pagedCredit,
-  } = usePagination(creditOrders, 4);
+  } = usePagination(searchedCreditOrders, 4);
 
   const handleCollectCredit = async (orderId: string, method: 'cash' | 'mpesa') => {
     await db.orders.update(orderId, {
@@ -431,23 +465,34 @@ export const AdminDashboard: React.FC = () => {
                 <p className="text-zinc-600 text-[11px] font-mono text-center py-4">No sales settled yet today</p>
               ) : (
                 <div>
-                  <div className="space-y-1.5">
-                    {pagedItemsSold.map((it) => (
-                      <div
-                        key={it.dish_name}
-                        className="flex items-center justify-between bg-zinc-900/40 px-2.5 py-1.5 rounded-lg border border-zinc-800/60"
-                      >
-                        <span className="text-xs text-zinc-200 truncate">{it.dish_name}</span>
-                        <div className="flex items-center gap-2 shrink-0">
-                          <span className="text-[10px] font-mono text-orange-400 bg-orange-500/10 border border-orange-500/20 px-1.5 py-0.5 rounded">
-                            x{it.quantity}
-                          </span>
-                          <span className="text-[10px] font-mono text-zinc-500 w-14 text-right">{money(it.revenue)}</span>
-                        </div>
+                  <SearchInput
+                    value={itemsSearch}
+                    onChange={(v) => { setItemsSearch(v); setItemsPage(1); }}
+                    placeholder="Search items sold..."
+                  />
+                  {searchedItemsSold.length === 0 ? (
+                    <p className="text-zinc-600 text-[11px] font-mono text-center py-4">No items match your search</p>
+                  ) : (
+                    <>
+                      <div className="space-y-1.5 mt-2">
+                        {pagedItemsSold.map((it) => (
+                          <div
+                            key={it.dish_name}
+                            className="flex items-center justify-between bg-zinc-900/40 px-2.5 py-1.5 rounded-lg border border-zinc-800/60"
+                          >
+                            <span className="text-xs text-zinc-200 truncate">{it.dish_name}</span>
+                            <div className="flex items-center gap-2 shrink-0">
+                              <span className="text-[10px] font-mono text-orange-400 bg-orange-500/10 border border-orange-500/20 px-1.5 py-0.5 rounded">
+                                x{it.quantity}
+                              </span>
+                              <span className="text-[10px] font-mono text-zinc-500 w-14 text-right">{money(it.revenue)}</span>
+                            </div>
+                          </div>
+                        ))}
                       </div>
-                    ))}
-                  </div>
-                  <Pagination page={itemsPage} totalPages={itemsTotalPages} onPageChange={setItemsPage} />
+                      <Pagination page={itemsPage} totalPages={itemsTotalPages} onPageChange={setItemsPage} />
+                    </>
+                  )}
                 </div>
               )}
             </div>
@@ -501,8 +546,19 @@ export const AdminDashboard: React.FC = () => {
             </button>
           </div>
 
+          <SearchInput
+            value={staffSearch}
+            onChange={(v) => { setStaffSearch(v); setStaffPage(1); }}
+            placeholder="Search staff..."
+          />
+
           <div className="space-y-2">
-            {pagedStaff.map((s) => {
+            {searchedStaff.length === 0 ? (
+              <p className="text-zinc-600 text-[11px] font-mono text-center py-6">
+                {staffSearch ? 'No staff match your search' : 'No staff yet'}
+              </p>
+            ) : (
+              pagedStaff.map((s) => {
               const adminCount = (staff ?? []).filter((x) => x.role === 'admin').length;
               const isSelf = currentUser?.user_id === s.user_id;
               const isLastAdmin = s.role === 'admin' && adminCount <= 1;
@@ -581,7 +637,8 @@ export const AdminDashboard: React.FC = () => {
                   )}
                 </div>
               );
-            })}
+              })
+            )}
           </div>
           <Pagination page={staffPage} totalPages={staffTotalPages} onPageChange={setStaffPage} />
         </div>
@@ -607,8 +664,17 @@ export const AdminDashboard: React.FC = () => {
               <p className="text-zinc-600 text-[11px] font-mono text-center py-6">No open credit bills</p>
             ) : (
               <div>
-                <div className="space-y-2.5">
-                  {pagedCredit.map((o) => (
+                <SearchInput
+                  value={creditSearch}
+                  onChange={(v) => { setCreditSearch(v); setCreditPage(1); }}
+                  placeholder="Search by waiter or ticket..."
+                />
+                {searchedCreditOrders.length === 0 ? (
+                  <p className="text-zinc-600 text-[11px] font-mono text-center py-4">No tabs match your search</p>
+                ) : (
+                  <>
+                    <div className="space-y-2.5 mt-2">
+                      {pagedCredit.map((o) => (
                     <div
                       key={o.order_id}
                       className="bg-zinc-900/60 border border-zinc-800/60 rounded-xl p-3 space-y-2"
@@ -647,8 +713,10 @@ export const AdminDashboard: React.FC = () => {
                       </div>
                     </div>
                   ))}
-                </div>
-                <Pagination page={creditPage} totalPages={creditTotalPages} onPageChange={setCreditPage} />
+                    </div>
+                    <Pagination page={creditPage} totalPages={creditTotalPages} onPageChange={setCreditPage} />
+                  </>
+                )}
               </div>
             )}
           </div>
@@ -700,15 +768,21 @@ export const AdminDashboard: React.FC = () => {
               ))}
             </div>
 
-            <div className="space-y-3">
-              {filteredLedgers.length === 0 ? (
+            <SearchInput
+              value={ledgerSearch}
+              onChange={(v) => { setLedgerSearch(v); setLedgerPage(1); }}
+              placeholder="Search by staff or reason..."
+            />
+
+            <div className="space-y-3 mt-3">
+              {searchedLedgers.length === 0 ? (
                 <div className="relative text-center py-10 bg-[#0f1117] rounded-3xl border border-zinc-800/80 p-6 shadow-xl">
                   <CheckCircle2 className="w-9 h-9 text-orange-500 mx-auto mb-2 opacity-80" />
                   <p className="text-white font-mono font-bold text-xs uppercase tracking-wider">
                     No Entries
                   </p>
                   <p className="text-zinc-500 text-[11px] font-mono mt-1">
-                    Nothing logged for this filter yet
+                    {ledgerSearch ? 'No entries match your search' : 'Nothing logged for this filter yet'}
                   </p>
                 </div>
               ) : (
