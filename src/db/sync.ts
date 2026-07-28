@@ -200,7 +200,6 @@ async function pushUnsyncedIngredients() {
   );
 }
 
-// NEW: Push unsynced users only (instead of all users)
 async function pushUnsyncedUsers() {
   const rows = await db.users.filter((u) => u.synced === false).toArray();
   if (rows.length === 0) return;
@@ -209,20 +208,14 @@ async function pushUnsyncedUsers() {
   await db.users.bulkUpdate(rows.map((r) => ({ key: r.user_id, changes: { synced: true } })));
 }
 
-// NEW: Push unsynced recipes only
-// Note: Recipes have a composite key, so we handle them differently.
-// We'll push them and then re-pull to ensure we have the correct state.
 async function pushUnsyncedRecipes() {
   const rows = await db.recipes.filter((r) => r.synced === false).toArray();
   if (rows.length === 0) return;
   const { error } = await supabase.from('recipes').upsert(rows.map(recipeToRow));
   if (error) throw error;
-  // For composite keys, we can't easily bulkUpdate, so we mark them synced by re-pulling
-  // This is safe because recipes are small (a few dozen rows max)
-  const { data: pulledRecipes } = await supabase.from('recipes').select('*');
-  if (pulledRecipes) {
-    await db.recipes.bulkPut(pulledRecipes.map(recipeFromRow));
-  }
+  await db.recipes.bulkUpdate(
+    rows.map((r) => ({ key: [r.dish_name, r.ingredient_id], changes: { synced: true } }))
+  );
 }
 
 /** Push every table's pending local changes up to Supabase. */
@@ -388,9 +381,12 @@ export async function startSync() {
 
   try {
     setStatus('syncing');
-    // Initial sync: push everything then pull everything
-    await pushAll();
+    // Pull first: hydrate this device from Supabase (the source of truth)
+    // before pushing anything local up. Pushing first would let a device
+    // with stale or freshly-seeded local data overwrite what other devices
+    // already deleted or changed.
     await pullAll();
+    await pushAll();
     lastSync = new Date();
     setStatus('synced');
   } catch (err) {

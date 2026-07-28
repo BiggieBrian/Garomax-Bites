@@ -175,6 +175,7 @@ export const StockMenuManager: React.FC = () => {
         selling_price: price,
         ingredient_id: l.ingredient_id,
         quantity_per_plate: parseFloat(l.quantity_per_plate),
+        synced: false,
       }))
     );
     requestSync();
@@ -194,7 +195,7 @@ export const StockMenuManager: React.FC = () => {
       setEditingPriceDish(null);
       return;
     }
-    await db.recipes.where('dish_name').equals(dish_name).modify({ selling_price: price });
+    await db.recipes.where('dish_name').equals(dish_name).modify({ selling_price: price, synced: false });
     requestSync();
     setEditingPriceDish(null);
     setEditingPriceValue('');
@@ -232,6 +233,7 @@ export const StockMenuManager: React.FC = () => {
       ingredient_id: newLineIngredient,
       selling_price,
       quantity_per_plate: qty,
+      synced: false,
     });
     requestSync();
     setAddingLineTo(null);

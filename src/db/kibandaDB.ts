@@ -44,23 +44,19 @@ export class KibandaDatabase extends Dexie {
         if (user.basic_salary === undefined) {
           user.basic_salary = 0;
         }
-        // Initialize synced flag for existing users
-        if (user.synced === undefined) {
-          user.synced = true;
-        }
       });
     });
 
-    // v4: Add synced flag for users and recipes to support proper sync
+    // v4: users and recipes now track `synced` like every other table, so a
+    // device only ever pushes rows it actually changed instead of blindly
+    // re-uploading its whole local copy of these tables on every sync tick
+    // (that pattern is what let a stale/reseeded device resurrect staff
+    // another device had deleted). Existing local rows are treated as
+    // already-synced baseline data, not new local edits.
     this.version(4).stores({
       users: 'user_id, pin_code, role, synced',
-      ingredients: 'ingredient_id, name, synced',
       recipes: '[dish_name+ingredient_id], dish_name, ingredient_id, synced',
-      orders: 'order_id, payment_status, kitchen_status, placed_by_waiter_id, timestamp, synced',
-      wasteLogs: 'waste_id, logged_by_cook_id, timestamp, synced',
-      staffLedgers: 'ledger_id, staff_id, date, synced'
     }).upgrade(async (tx) => {
-      // Initialize synced for existing users and recipes
       await tx.table('users').toCollection().modify((user) => {
         if (user.synced === undefined) user.synced = true;
       });

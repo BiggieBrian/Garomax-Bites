@@ -162,6 +162,7 @@ export const AdminDashboard: React.FC = () => {
       pin_code: newPin,
       active_shift: true,
       basic_salary: parseFloat(newSalary) || 0,
+      synced: false,
     });
     requestSync();
     resetStaffForm();
@@ -169,7 +170,7 @@ export const AdminDashboard: React.FC = () => {
   };
 
   const toggleActiveShift = async (userId: string, current: boolean) => {
-    await db.users.update(userId, { active_shift: !current });
+    await db.users.update(userId, { active_shift: !current, synced: false });
     requestSync();
   };
 
@@ -228,6 +229,7 @@ export const AdminDashboard: React.FC = () => {
     await db.users.update(editingStaff.user_id, {
       pin_code: editPin,
       basic_salary: parseFloat(editSalary) || 0,
+      synced: false,
     });
     requestSync();
     setEditingStaff(null);

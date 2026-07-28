@@ -4402,457 +4402,6 @@ export default defineConfig([
 }
 </file>
 
-<file path="src/db/seedLocalData.ts">
-import { db } from './kibandaDB';
-
-export async function seedInitialData() {
-  const userCount = await db.users.count();
-  if (userCount === 0) {
-    // Seed default staff
-    await db.users.bulkAdd([
-      { user_id: '1', name: 'Garomax Owner', role: 'admin', pin_code: '0000', active_shift: true, basic_salary: 0 },
-      { user_id: '2', name: 'Chef James', role: 'cook', pin_code: '1111', active_shift: true, basic_salary: 15000 },
-      { user_id: '3', name: 'Waitstaff Mary', role: 'waiter', pin_code: '2222', active_shift: true, basic_salary: 12000 },
-    ]);
-
-    // Seed default ingredients
-    await db.ingredients.bulkAdd([
-      { ingredient_id: 'i1', name: 'Unga (Maize Flour)', unit: 'kg', quantity_on_hand: 25, last_purchase_cost: 150, low_stock_threshold: 5 },
-      { ingredient_id: 'i2', name: 'Potatoes (Viazi)', unit: 'kg', quantity_on_hand: 40, last_purchase_cost: 100, low_stock_threshold: 10 },
-      { ingredient_id: 'i3', name: 'Cooking Oil', unit: 'l', quantity_on_hand: 15, last_purchase_cost: 250, low_stock_threshold: 3 },
-    ]);
-
-    // Seed default recipes
-    await db.recipes.bulkAdd([
-      { dish_name: 'Ugali', selling_price: 50, ingredient_id: 'i1', quantity_per_plate: 0.2 },
-      { dish_name: 'Chips', selling_price: 120, ingredient_id: 'i2', quantity_per_plate: 0.3 },
-      { dish_name: 'Chips', selling_price: 120, ingredient_id: 'i3', quantity_per_plate: 0.05 },
-    ]);
-
-    console.log('Garomax Bites local IndexedDB seeded!');
-  }
-}
-</file>
-
-<file path="src/db/sync.ts">
-import { supabase, isSupabaseConfigured } from '../lib/supabase';
-import { db } from './kibandaDB';
-import type {
-  User,
-  Ingredient,
-  RecipeItem,
-  Order,
-  WasteLog,
-  StaffLedger,
-} from '../types';
-
-export type SyncStatus = 'offline' | 'syncing' | 'synced' | 'error';
-
-type Listener = (status: SyncStatus, lastSync: Date | null) => void;
-
-let currentStatus: SyncStatus = isSupabaseConfigured ? 'offline' : 'offline';
-let lastSync: Date | null = null;
-const listeners = new Set<Listener>();
-
-function setStatus(status: SyncStatus) {
-  currentStatus = status;
-  listeners.forEach((l) => l(currentStatus, lastSync));
-}
-
-export function onSyncStatusChange(cb: Listener): () => void {
-  listeners.add(cb);
-  cb(currentStatus, lastSync);
-  return () => listeners.delete(cb);
-}
-
-// ---------------------------------------------------------------------------
-// Row <-> local type mapping. Orders and WasteLog store their date under
-// `timestamp` locally, but the Postgres column is called `ts` (avoids the
-// reserved-word-flavoured `timestamp` name in SQL).
-// ---------------------------------------------------------------------------
-
-const orderToRow = (o: Order) => ({
-  order_id: o.order_id,
-  payment_status: o.payment_status,
-  payment_method: o.payment_method ?? null,
-  mpesa_code: o.mpesa_code ?? null,
-  kitchen_status: o.kitchen_status,
-  items: o.items,
-  total_amount: o.total_amount,
-  placed_by_waiter_id: o.placed_by_waiter_id,
-  confirmed_by_cook_id: o.confirmed_by_cook_id ?? null,
-  ts: o.timestamp,
-});
-
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-const orderFromRow = (r: any): Order => ({
-  order_id: r.order_id,
-  payment_status: r.payment_status,
-  payment_method: r.payment_method ?? undefined,
-  mpesa_code: r.mpesa_code ?? undefined,
-  kitchen_status: r.kitchen_status ?? 'queued',
-  items: r.items,
-  total_amount: r.total_amount,
-  placed_by_waiter_id: r.placed_by_waiter_id,
-  confirmed_by_cook_id: r.confirmed_by_cook_id ?? undefined,
-  timestamp: r.ts,
-  synced: true,
-});
-
-const wasteToRow = (w: WasteLog) => ({
-  waste_id: w.waste_id,
-  dish_or_ingredient: w.dish_or_ingredient,
-  quantity: w.quantity,
-  reason: w.reason,
-  logged_by_cook_id: w.logged_by_cook_id,
-  deduction_flag: w.deduction_flag,
-  ts: w.timestamp,
-});
-
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-const wasteFromRow = (r: any): WasteLog => ({
-  waste_id: r.waste_id,
-  dish_or_ingredient: r.dish_or_ingredient,
-  quantity: r.quantity,
-  reason: r.reason,
-  logged_by_cook_id: r.logged_by_cook_id,
-  deduction_flag: r.deduction_flag,
-  timestamp: r.ts,
-  synced: true,
-});
-
-const ledgerToRow = (l: StaffLedger) => ({
-  ledger_id: l.ledger_id,
-  staff_id: l.staff_id,
-  date: l.date,
-  shortage_amount: l.shortage_amount,
-  spoilage_cost: l.spoilage_cost,
-  reason: l.reason,
-  payroll_deduction_status: l.payroll_deduction_status,
-});
-
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-const ledgerFromRow = (r: any): StaffLedger => ({
-  ledger_id: r.ledger_id,
-  staff_id: r.staff_id,
-  date: r.date,
-  shortage_amount: r.shortage_amount,
-  spoilage_cost: r.spoilage_cost,
-  reason: r.reason,
-  payroll_deduction_status: r.payroll_deduction_status,
-  synced: true,
-});
-
-const ingredientToRow = (i: Ingredient) => ({
-  ingredient_id: i.ingredient_id,
-  name: i.name,
-  unit: i.unit,
-  quantity_on_hand: i.quantity_on_hand,
-  last_purchase_cost: i.last_purchase_cost,
-  low_stock_threshold: i.low_stock_threshold,
-});
-
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-const ingredientFromRow = (r: any): Ingredient => ({
-  ingredient_id: r.ingredient_id,
-  name: r.name,
-  unit: r.unit,
-  quantity_on_hand: r.quantity_on_hand,
-  last_purchase_cost: r.last_purchase_cost,
-  low_stock_threshold: r.low_stock_threshold,
-  synced: true,
-});
-
-const userToRow = (u: User) => ({
-  user_id: u.user_id,
-  name: u.name,
-  role: u.role,
-  pin_code: u.pin_code,
-  active_shift: u.active_shift,
-  basic_salary: u.basic_salary,
-});
-
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-const userFromRow = (r: any): User => ({
-  user_id: r.user_id,
-  name: r.name,
-  role: r.role,
-  pin_code: r.pin_code,
-  active_shift: r.active_shift,
-  basic_salary: r.basic_salary ?? 0,
-});
-
-const recipeToRow = (r: RecipeItem) => ({
-  dish_name: r.dish_name,
-  ingredient_id: r.ingredient_id,
-  selling_price: r.selling_price,
-  quantity_per_plate: r.quantity_per_plate,
-});
-
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-const recipeFromRow = (r: any): RecipeItem => ({
-  dish_name: r.dish_name,
-  ingredient_id: r.ingredient_id,
-  selling_price: r.selling_price,
-  quantity_per_plate: r.quantity_per_plate,
-});
-
-// ---------------------------------------------------------------------------
-// Push: send local unsynced rows up to Supabase, then mark them synced.
-// ---------------------------------------------------------------------------
-
-async function pushUnsyncedOrders() {
-  const rows = await db.orders.filter((o) => o.synced === false).toArray();
-  if (rows.length === 0) return;
-  const { error } = await supabase.from('orders').upsert(rows.map(orderToRow));
-  if (error) throw error;
-  await db.orders.bulkUpdate(rows.map((r) => ({ key: r.order_id, changes: { synced: true } })));
-}
-
-async function pushUnsyncedWaste() {
-  const rows = await db.wasteLogs.filter((w) => w.synced === false).toArray();
-  if (rows.length === 0) return;
-  const { error } = await supabase.from('waste_logs').upsert(rows.map(wasteToRow));
-  if (error) throw error;
-  await db.wasteLogs.bulkUpdate(rows.map((r) => ({ key: r.waste_id, changes: { synced: true } })));
-}
-
-async function pushUnsyncedLedgers() {
-  const rows = await db.staffLedgers.filter((l) => l.synced === false).toArray();
-  if (rows.length === 0) return;
-  const { error } = await supabase.from('staff_ledgers').upsert(rows.map(ledgerToRow));
-  if (error) throw error;
-  await db.staffLedgers.bulkUpdate(rows.map((r) => ({ key: r.ledger_id, changes: { synced: true } })));
-}
-
-async function pushUnsyncedIngredients() {
-  const rows = await db.ingredients.filter((i) => i.synced === false).toArray();
-  if (rows.length === 0) return;
-  const { error } = await supabase.from('ingredients').upsert(rows.map(ingredientToRow));
-  if (error) throw error;
-  await db.ingredients.bulkUpdate(
-    rows.map((r) => ({ key: r.ingredient_id, changes: { synced: true } }))
-  );
-}
-
-// Users and recipes are seeded/admin-managed and have no `synced` flag yet —
-// push everything currently held locally so a fresh install "claims" its
-// seed data in Supabase. Safe to call repeatedly (upsert is idempotent), and
-// cheap since these tables are small (a handful of staff, a few dozen recipe
-// rows), so we just do it on every sync pass rather than tracking dirtiness.
-async function pushAllUsersAndRecipes() {
-  const users = await db.users.toArray();
-  const recipes = await db.recipes.toArray();
-  if (users.length) {
-    const { error } = await supabase.from('users').upsert(users.map(userToRow));
-    if (error) throw error;
-  }
-  if (recipes.length) {
-    const { error } = await supabase.from('recipes').upsert(recipes.map(recipeToRow));
-    if (error) throw error;
-  }
-}
-
-/** Push every table's pending local changes up to Supabase. */
-export async function pushAll() {
-  if (!isSupabaseConfigured) return;
-  await Promise.all([
-    pushUnsyncedOrders(),
-    pushUnsyncedWaste(),
-    pushUnsyncedLedgers(),
-    pushUnsyncedIngredients(),
-    pushAllUsersAndRecipes(),
-  ]);
-}
-
-// ---------------------------------------------------------------------------
-// Deletes — Dexie tables don't queue offline deletes, so these push straight
-// to Supabase. Call them right after the matching local db.<table>.delete().
-// If the device is offline when a delete happens, other devices won't see it
-// until this is called again while online (no retry queue yet).
-// ---------------------------------------------------------------------------
-
-export async function deleteUserRemote(userId: string) {
-  if (!isSupabaseConfigured || !navigator.onLine) return;
-  const { error } = await supabase.from('users').delete().eq('user_id', userId);
-  if (error) console.error('[Garomax] delete user remote error', error);
-}
-
-export async function deleteIngredientRemote(ingredientId: string) {
-  if (!isSupabaseConfigured || !navigator.onLine) return;
-  const { error } = await supabase.from('ingredients').delete().eq('ingredient_id', ingredientId);
-  if (error) console.error('[Garomax] delete ingredient remote error', error);
-}
-
-export async function deleteRecipeDishRemote(dishName: string) {
-  if (!isSupabaseConfigured || !navigator.onLine) return;
-  const { error } = await supabase.from('recipes').delete().eq('dish_name', dishName);
-  if (error) console.error('[Garomax] delete dish remote error', error);
-}
-
-export async function deleteRecipeLineRemote(dishName: string, ingredientId: string) {
-  if (!isSupabaseConfigured || !navigator.onLine) return;
-  const { error } = await supabase
-    .from('recipes')
-    .delete()
-    .eq('dish_name', dishName)
-    .eq('ingredient_id', ingredientId);
-  if (error) console.error('[Garomax] delete recipe line remote error', error);
-}
-
-// ---------------------------------------------------------------------------
-// Pull: bring remote rows down into Dexie (used on startup and via realtime).
-// ---------------------------------------------------------------------------
-
-async function pullAll() {
-  const [users, ingredients, recipes, orders, waste, ledgers] = await Promise.all([
-    supabase.from('users').select('*'),
-    supabase.from('ingredients').select('*'),
-    supabase.from('recipes').select('*'),
-    supabase.from('orders').select('*'),
-    supabase.from('waste_logs').select('*'),
-    supabase.from('staff_ledgers').select('*'),
-  ]);
-
-  if (users.data?.length) await db.users.bulkPut(users.data.map(userFromRow));
-  if (ingredients.data?.length) await db.ingredients.bulkPut(ingredients.data.map(ingredientFromRow));
-  if (recipes.data?.length) await db.recipes.bulkPut(recipes.data.map(recipeFromRow));
-  if (orders.data?.length) await db.orders.bulkPut(orders.data.map(orderFromRow));
-  if (waste.data?.length) await db.wasteLogs.bulkPut(waste.data.map(wasteFromRow));
-  if (ledgers.data?.length) await db.staffLedgers.bulkPut(ledgers.data.map(ledgerFromRow));
-}
-
-// ---------------------------------------------------------------------------
-// Realtime: keep every open device's Dexie in step with Supabase as changes
-// land from any other device (waiter tablet, kitchen screen, admin phone).
-// ---------------------------------------------------------------------------
-
-function subscribeRealtime() {
-  const channel = supabase.channel('garomax-sync');
-
-  channel
-    .on('postgres_changes', { event: '*', schema: 'public', table: 'orders' }, (payload) => {
-      if (payload.eventType === 'DELETE') {
-        if (payload.old?.order_id) db.orders.delete(payload.old.order_id);
-        return;
-      }
-      db.orders.put(orderFromRow(payload.new));
-    })
-    .on('postgres_changes', { event: '*', schema: 'public', table: 'ingredients' }, (payload) => {
-      if (payload.eventType === 'DELETE') {
-        if (payload.old?.ingredient_id) db.ingredients.delete(payload.old.ingredient_id);
-        return;
-      }
-      db.ingredients.put(ingredientFromRow(payload.new));
-    })
-    .on('postgres_changes', { event: '*', schema: 'public', table: 'waste_logs' }, (payload) => {
-      if (payload.eventType === 'DELETE') {
-        if (payload.old?.waste_id) db.wasteLogs.delete(payload.old.waste_id);
-        return;
-      }
-      db.wasteLogs.put(wasteFromRow(payload.new));
-    })
-    .on('postgres_changes', { event: '*', schema: 'public', table: 'staff_ledgers' }, (payload) => {
-      if (payload.eventType === 'DELETE') {
-        if (payload.old?.ledger_id) db.staffLedgers.delete(payload.old.ledger_id);
-        return;
-      }
-      db.staffLedgers.put(ledgerFromRow(payload.new));
-    })
-    .on('postgres_changes', { event: '*', schema: 'public', table: 'users' }, (payload) => {
-      if (payload.eventType === 'DELETE') {
-        if (payload.old?.user_id) db.users.delete(payload.old.user_id);
-        return;
-      }
-      db.users.put(userFromRow(payload.new));
-    })
-    .on('postgres_changes', { event: '*', schema: 'public', table: 'recipes' }, (payload) => {
-      if (payload.eventType === 'DELETE') {
-        if (payload.old?.dish_name && payload.old?.ingredient_id) {
-          db.recipes.delete([payload.old.dish_name, payload.old.ingredient_id]);
-        }
-        return;
-      }
-      db.recipes.put(recipeFromRow(payload.new));
-    })
-    .subscribe();
-
-  return channel;
-}
-
-// ---------------------------------------------------------------------------
-// Public entry point
-// ---------------------------------------------------------------------------
-
-let started = false;
-let pushTimer: ReturnType<typeof setInterval> | null = null;
-
-/** Call once on app startup. No-ops safely if Supabase env vars aren't set. */
-export async function startSync() {
-  if (started) return;
-  started = true;
-
-  if (!isSupabaseConfigured) {
-    setStatus('offline');
-    return;
-  }
-
-  const runSync = async () => {
-    if (!navigator.onLine) {
-      setStatus('offline');
-      return;
-    }
-    try {
-      setStatus('syncing');
-      await pushAll();
-      lastSync = new Date();
-      setStatus('synced');
-    } catch (err) {
-      console.error('[Garomax] sync error', err);
-      setStatus('error');
-    }
-  };
-
-  try {
-    setStatus('syncing');
-    await pushAllUsersAndRecipes();
-    await pullAll();
-    lastSync = new Date();
-    setStatus('synced');
-  } catch (err) {
-    console.error('[Garomax] initial sync error', err);
-    setStatus('error');
-  }
-
-  subscribeRealtime();
-
-  // Safety-net push loop, in case a page write happens without calling
-  // requestSync() directly (e.g. future code paths).
-  pushTimer = setInterval(runSync, 5000);
-  window.addEventListener('online', runSync);
-  window.addEventListener('offline', () => setStatus('offline'));
-}
-
-/** Call after any local write for a near-instant push instead of waiting on the interval. */
-export function requestSync() {
-  if (!isSupabaseConfigured || !navigator.onLine) return;
-  pushAll()
-    .then(() => {
-      lastSync = new Date();
-      setStatus('synced');
-    })
-    .catch((err) => {
-      console.error('[Garomax] push error', err);
-      setStatus('error');
-    });
-}
-
-export function stopSync() {
-  if (pushTimer) clearInterval(pushTimer);
-  started = false;
-}
-</file>
-
 <file path="src/pages/Login.tsx">
 import React, { useState } from 'react';
 import { useAuth } from '../context/AuthContext';
@@ -5235,59 +4784,466 @@ export default defineConfig([
 ```
 </file>
 
-<file path="src/db/kibandaDB.ts">
-import Dexie, { type Table } from 'dexie';
-import type { User, Ingredient, RecipeItem, Order, WasteLog, StaffLedger } from '../types';
+<file path="src/db/seedLocalData.ts">
+import { db } from './kibandaDB';
 
-export class KibandaDatabase extends Dexie {
-  users!: Table<User>;
-  ingredients!: Table<Ingredient>;
-  recipes!: Table<RecipeItem>;
-  orders!: Table<Order>;
-  wasteLogs!: Table<WasteLog>;
-  staffLedgers!: Table<StaffLedger>;
+export async function seedInitialData() {
+  const userCount = await db.users.count();
+  if (userCount === 0) {
+    // Seed default staff with synced: false so they get uploaded
+    await db.users.bulkAdd([
+      { user_id: '1', name: 'Garomax Owner', role: 'admin', pin_code: '0000', active_shift: true, basic_salary: 0, synced: false },
+      { user_id: '2', name: 'Chef James', role: 'cook', pin_code: '1111', active_shift: true, basic_salary: 15000, synced: false },
+      { user_id: '3', name: 'Waitstaff Mary', role: 'waiter', pin_code: '2222', active_shift: true, basic_salary: 12000, synced: false },
+    ]);
 
-  constructor() {
-    super('GaromaxBitesDB');
-    
-    this.version(1).stores({
-      users: 'user_id, pin_code, role',
-      ingredients: 'ingredient_id, name',
-      recipes: '[dish_name+ingredient_id], dish_name, ingredient_id',
-      orders: 'order_id, payment_status, placed_by_waiter_id, timestamp, synced',
-      wasteLogs: 'waste_id, logged_by_cook_id, timestamp, synced',
-      staffLedgers: 'ledger_id, staff_id, date, synced'
-    });
+    // Seed default ingredients with synced: false
+    await db.ingredients.bulkAdd([
+      { ingredient_id: 'i1', name: 'Unga (Maize Flour)', unit: 'kg', quantity_on_hand: 25, last_purchase_cost: 150, low_stock_threshold: 5, synced: false },
+      { ingredient_id: 'i2', name: 'Potatoes (Viazi)', unit: 'kg', quantity_on_hand: 40, last_purchase_cost: 100, low_stock_threshold: 10, synced: false },
+      { ingredient_id: 'i3', name: 'Cooking Oil', unit: 'l', quantity_on_hand: 15, last_purchase_cost: 250, low_stock_threshold: 3, synced: false },
+    ]);
 
-    // v2: kitchen prep status is now tracked separately from payment status,
-    // so "mark prepared" in the kitchen no longer closes the waiter's bill.
-    this.version(2).stores({
-      orders: 'order_id, payment_status, kitchen_status, placed_by_waiter_id, timestamp, synced',
-    }).upgrade(async (tx) => {
-      await tx.table('orders').toCollection().modify((order) => {
-        if (!order.kitchen_status) {
-          // Best-effort backfill: orders already marked paid under the old
-          // logic were also implicitly "prepared", so treat them as ready.
-          order.kitchen_status = order.payment_status === 'active' ? 'queued' : 'ready';
-        }
-      });
-    });
+    // Seed default recipes with synced: false
+    await db.recipes.bulkAdd([
+      { dish_name: 'Ugali', selling_price: 50, ingredient_id: 'i1', quantity_per_plate: 0.2, synced: false },
+      { dish_name: 'Chips', selling_price: 120, ingredient_id: 'i2', quantity_per_plate: 0.3, synced: false },
+      { dish_name: 'Chips', selling_price: 120, ingredient_id: 'i3', quantity_per_plate: 0.05, synced: false },
+    ]);
 
-    // v3: staff now have a basic salary so payroll can be computed
-    // automatically instead of an admin doing the maths by hand.
-    this.version(3).stores({
-      users: 'user_id, pin_code, role',
-    }).upgrade(async (tx) => {
-      await tx.table('users').toCollection().modify((user) => {
-        if (user.basic_salary === undefined) {
-          user.basic_salary = 0;
-        }
-      });
-    });
+    console.log('Garomax Bites local IndexedDB seeded!');
+  }
+}
+</file>
+
+<file path="src/db/sync.ts">
+import { supabase, isSupabaseConfigured } from '../lib/supabase';
+import { db } from './kibandaDB';
+import type {
+  User,
+  Ingredient,
+  RecipeItem,
+  Order,
+  WasteLog,
+  StaffLedger,
+} from '../types';
+
+export type SyncStatus = 'offline' | 'syncing' | 'synced' | 'error';
+
+type Listener = (status: SyncStatus, lastSync: Date | null) => void;
+
+let currentStatus: SyncStatus = isSupabaseConfigured ? 'offline' : 'offline';
+let lastSync: Date | null = null;
+const listeners = new Set<Listener>();
+
+function setStatus(status: SyncStatus) {
+  currentStatus = status;
+  listeners.forEach((l) => l(currentStatus, lastSync));
+}
+
+export function onSyncStatusChange(cb: Listener): () => void {
+  listeners.add(cb);
+  cb(currentStatus, lastSync);
+  return () => listeners.delete(cb);
+}
+
+// ---------------------------------------------------------------------------
+// Row <-> local type mapping. Orders and WasteLog store their date under
+// `timestamp` locally, but the Postgres column is called `ts` (avoids the
+// reserved-word-flavoured `timestamp` name in SQL).
+// ---------------------------------------------------------------------------
+
+const orderToRow = (o: Order) => ({
+  order_id: o.order_id,
+  payment_status: o.payment_status,
+  payment_method: o.payment_method ?? null,
+  mpesa_code: o.mpesa_code ?? null,
+  kitchen_status: o.kitchen_status,
+  items: o.items,
+  total_amount: o.total_amount,
+  placed_by_waiter_id: o.placed_by_waiter_id,
+  confirmed_by_cook_id: o.confirmed_by_cook_id ?? null,
+  ts: o.timestamp,
+});
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const orderFromRow = (r: any): Order => ({
+  order_id: r.order_id,
+  payment_status: r.payment_status,
+  payment_method: r.payment_method ?? undefined,
+  mpesa_code: r.mpesa_code ?? undefined,
+  kitchen_status: r.kitchen_status ?? 'queued',
+  items: r.items,
+  total_amount: r.total_amount,
+  placed_by_waiter_id: r.placed_by_waiter_id,
+  confirmed_by_cook_id: r.confirmed_by_cook_id ?? undefined,
+  timestamp: r.ts,
+  synced: true,
+});
+
+const wasteToRow = (w: WasteLog) => ({
+  waste_id: w.waste_id,
+  dish_or_ingredient: w.dish_or_ingredient,
+  quantity: w.quantity,
+  reason: w.reason,
+  logged_by_cook_id: w.logged_by_cook_id,
+  deduction_flag: w.deduction_flag,
+  ts: w.timestamp,
+});
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const wasteFromRow = (r: any): WasteLog => ({
+  waste_id: r.waste_id,
+  dish_or_ingredient: r.dish_or_ingredient,
+  quantity: r.quantity,
+  reason: r.reason,
+  logged_by_cook_id: r.logged_by_cook_id,
+  deduction_flag: r.deduction_flag,
+  timestamp: r.ts,
+  synced: true,
+});
+
+const ledgerToRow = (l: StaffLedger) => ({
+  ledger_id: l.ledger_id,
+  staff_id: l.staff_id,
+  date: l.date,
+  shortage_amount: l.shortage_amount,
+  spoilage_cost: l.spoilage_cost,
+  reason: l.reason,
+  payroll_deduction_status: l.payroll_deduction_status,
+});
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const ledgerFromRow = (r: any): StaffLedger => ({
+  ledger_id: r.ledger_id,
+  staff_id: r.staff_id,
+  date: r.date,
+  shortage_amount: r.shortage_amount,
+  spoilage_cost: r.spoilage_cost,
+  reason: r.reason,
+  payroll_deduction_status: r.payroll_deduction_status,
+  synced: true,
+});
+
+const ingredientToRow = (i: Ingredient) => ({
+  ingredient_id: i.ingredient_id,
+  name: i.name,
+  unit: i.unit,
+  quantity_on_hand: i.quantity_on_hand,
+  last_purchase_cost: i.last_purchase_cost,
+  low_stock_threshold: i.low_stock_threshold,
+});
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const ingredientFromRow = (r: any): Ingredient => ({
+  ingredient_id: r.ingredient_id,
+  name: r.name,
+  unit: r.unit,
+  quantity_on_hand: r.quantity_on_hand,
+  last_purchase_cost: r.last_purchase_cost,
+  low_stock_threshold: r.low_stock_threshold,
+  synced: true,
+});
+
+const userToRow = (u: User) => ({
+  user_id: u.user_id,
+  name: u.name,
+  role: u.role,
+  pin_code: u.pin_code,
+  active_shift: u.active_shift,
+  basic_salary: u.basic_salary,
+});
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const userFromRow = (r: any): User => ({
+  user_id: r.user_id,
+  name: r.name,
+  role: r.role,
+  pin_code: r.pin_code,
+  active_shift: r.active_shift,
+  basic_salary: r.basic_salary ?? 0,
+  synced: true,
+});
+
+const recipeToRow = (r: RecipeItem) => ({
+  dish_name: r.dish_name,
+  ingredient_id: r.ingredient_id,
+  selling_price: r.selling_price,
+  quantity_per_plate: r.quantity_per_plate,
+});
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const recipeFromRow = (r: any): RecipeItem => ({
+  dish_name: r.dish_name,
+  ingredient_id: r.ingredient_id,
+  selling_price: r.selling_price,
+  quantity_per_plate: r.quantity_per_plate,
+  synced: true,
+});
+
+// ---------------------------------------------------------------------------
+// Push: send local unsynced rows up to Supabase, then mark them synced.
+// ---------------------------------------------------------------------------
+
+async function pushUnsyncedOrders() {
+  const rows = await db.orders.filter((o) => o.synced === false).toArray();
+  if (rows.length === 0) return;
+  const { error } = await supabase.from('orders').upsert(rows.map(orderToRow));
+  if (error) throw error;
+  await db.orders.bulkUpdate(rows.map((r) => ({ key: r.order_id, changes: { synced: true } })));
+}
+
+async function pushUnsyncedWaste() {
+  const rows = await db.wasteLogs.filter((w) => w.synced === false).toArray();
+  if (rows.length === 0) return;
+  const { error } = await supabase.from('waste_logs').upsert(rows.map(wasteToRow));
+  if (error) throw error;
+  await db.wasteLogs.bulkUpdate(rows.map((r) => ({ key: r.waste_id, changes: { synced: true } })));
+}
+
+async function pushUnsyncedLedgers() {
+  const rows = await db.staffLedgers.filter((l) => l.synced === false).toArray();
+  if (rows.length === 0) return;
+  const { error } = await supabase.from('staff_ledgers').upsert(rows.map(ledgerToRow));
+  if (error) throw error;
+  await db.staffLedgers.bulkUpdate(rows.map((r) => ({ key: r.ledger_id, changes: { synced: true } })));
+}
+
+async function pushUnsyncedIngredients() {
+  const rows = await db.ingredients.filter((i) => i.synced === false).toArray();
+  if (rows.length === 0) return;
+  const { error } = await supabase.from('ingredients').upsert(rows.map(ingredientToRow));
+  if (error) throw error;
+  await db.ingredients.bulkUpdate(
+    rows.map((r) => ({ key: r.ingredient_id, changes: { synced: true } }))
+  );
+}
+
+// NEW: Push unsynced users only (instead of all users)
+async function pushUnsyncedUsers() {
+  const rows = await db.users.filter((u) => u.synced === false).toArray();
+  if (rows.length === 0) return;
+  const { error } = await supabase.from('users').upsert(rows.map(userToRow));
+  if (error) throw error;
+  await db.users.bulkUpdate(rows.map((r) => ({ key: r.user_id, changes: { synced: true } })));
+}
+
+// NEW: Push unsynced recipes only
+// Note: Recipes have a composite key, so we handle them differently.
+// We'll push them and then re-pull to ensure we have the correct state.
+async function pushUnsyncedRecipes() {
+  const rows = await db.recipes.filter((r) => r.synced === false).toArray();
+  if (rows.length === 0) return;
+  const { error } = await supabase.from('recipes').upsert(rows.map(recipeToRow));
+  if (error) throw error;
+  // For composite keys, we can't easily bulkUpdate, so we mark them synced by re-pulling
+  // This is safe because recipes are small (a few dozen rows max)
+  const { data: pulledRecipes } = await supabase.from('recipes').select('*');
+  if (pulledRecipes) {
+    await db.recipes.bulkPut(pulledRecipes.map(recipeFromRow));
   }
 }
 
-export const db = new KibandaDatabase();
+/** Push every table's pending local changes up to Supabase. */
+export async function pushAll() {
+  if (!isSupabaseConfigured) return;
+  await Promise.all([
+    pushUnsyncedOrders(),
+    pushUnsyncedWaste(),
+    pushUnsyncedLedgers(),
+    pushUnsyncedIngredients(),
+    pushUnsyncedUsers(),
+    pushUnsyncedRecipes(),
+  ]);
+}
+
+// ---------------------------------------------------------------------------
+// Deletes — Dexie tables don't queue offline deletes, so these push straight
+// to Supabase. Call them right after the matching local db.<table>.delete().
+// If the device is offline when a delete happens, other devices won't see it
+// until this is called again while online (no retry queue yet).
+// ---------------------------------------------------------------------------
+
+export async function deleteUserRemote(userId: string) {
+  if (!isSupabaseConfigured || !navigator.onLine) return;
+  const { error } = await supabase.from('users').delete().eq('user_id', userId);
+  if (error) console.error('[Garomax] delete user remote error', error);
+}
+
+export async function deleteIngredientRemote(ingredientId: string) {
+  if (!isSupabaseConfigured || !navigator.onLine) return;
+  const { error } = await supabase.from('ingredients').delete().eq('ingredient_id', ingredientId);
+  if (error) console.error('[Garomax] delete ingredient remote error', error);
+}
+
+export async function deleteRecipeDishRemote(dishName: string) {
+  if (!isSupabaseConfigured || !navigator.onLine) return;
+  const { error } = await supabase.from('recipes').delete().eq('dish_name', dishName);
+  if (error) console.error('[Garomax] delete dish remote error', error);
+}
+
+export async function deleteRecipeLineRemote(dishName: string, ingredientId: string) {
+  if (!isSupabaseConfigured || !navigator.onLine) return;
+  const { error } = await supabase
+    .from('recipes')
+    .delete()
+    .eq('dish_name', dishName)
+    .eq('ingredient_id', ingredientId);
+  if (error) console.error('[Garomax] delete recipe line remote error', error);
+}
+
+// ---------------------------------------------------------------------------
+// Pull: bring remote rows down into Dexie (used on startup and via realtime).
+// ---------------------------------------------------------------------------
+
+async function pullAll() {
+  const [users, ingredients, recipes, orders, waste, ledgers] = await Promise.all([
+    supabase.from('users').select('*'),
+    supabase.from('ingredients').select('*'),
+    supabase.from('recipes').select('*'),
+    supabase.from('orders').select('*'),
+    supabase.from('waste_logs').select('*'),
+    supabase.from('staff_ledgers').select('*'),
+  ]);
+
+  if (users.data?.length) await db.users.bulkPut(users.data.map(userFromRow));
+  if (ingredients.data?.length) await db.ingredients.bulkPut(ingredients.data.map(ingredientFromRow));
+  if (recipes.data?.length) await db.recipes.bulkPut(recipes.data.map(recipeFromRow));
+  if (orders.data?.length) await db.orders.bulkPut(orders.data.map(orderFromRow));
+  if (waste.data?.length) await db.wasteLogs.bulkPut(waste.data.map(wasteFromRow));
+  if (ledgers.data?.length) await db.staffLedgers.bulkPut(ledgers.data.map(ledgerFromRow));
+}
+
+// ---------------------------------------------------------------------------
+// Realtime: keep every open device's Dexie in step with Supabase as changes
+// land from any other device (waiter tablet, kitchen screen, admin phone).
+// ---------------------------------------------------------------------------
+
+function subscribeRealtime() {
+  const channel = supabase.channel('garomax-sync');
+
+  channel
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'orders' }, (payload) => {
+      if (payload.eventType === 'DELETE') {
+        if (payload.old?.order_id) db.orders.delete(payload.old.order_id);
+        return;
+      }
+      db.orders.put(orderFromRow(payload.new));
+    })
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'ingredients' }, (payload) => {
+      if (payload.eventType === 'DELETE') {
+        if (payload.old?.ingredient_id) db.ingredients.delete(payload.old.ingredient_id);
+        return;
+      }
+      db.ingredients.put(ingredientFromRow(payload.new));
+    })
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'waste_logs' }, (payload) => {
+      if (payload.eventType === 'DELETE') {
+        if (payload.old?.waste_id) db.wasteLogs.delete(payload.old.waste_id);
+        return;
+      }
+      db.wasteLogs.put(wasteFromRow(payload.new));
+    })
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'staff_ledgers' }, (payload) => {
+      if (payload.eventType === 'DELETE') {
+        if (payload.old?.ledger_id) db.staffLedgers.delete(payload.old.ledger_id);
+        return;
+      }
+      db.staffLedgers.put(ledgerFromRow(payload.new));
+    })
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'users' }, (payload) => {
+      if (payload.eventType === 'DELETE') {
+        if (payload.old?.user_id) db.users.delete(payload.old.user_id);
+        return;
+      }
+      db.users.put(userFromRow(payload.new));
+    })
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'recipes' }, (payload) => {
+      if (payload.eventType === 'DELETE') {
+        if (payload.old?.dish_name && payload.old?.ingredient_id) {
+          db.recipes.delete([payload.old.dish_name, payload.old.ingredient_id]);
+        }
+        return;
+      }
+      db.recipes.put(recipeFromRow(payload.new));
+    })
+    .subscribe();
+
+  return channel;
+}
+
+// ---------------------------------------------------------------------------
+// Public entry point
+// ---------------------------------------------------------------------------
+
+let started = false;
+let pushTimer: ReturnType<typeof setInterval> | null = null;
+
+/** Call once on app startup. No-ops safely if Supabase env vars aren't set. */
+export async function startSync() {
+  if (started) return;
+  started = true;
+
+  if (!isSupabaseConfigured) {
+    setStatus('offline');
+    return;
+  }
+
+  const runSync = async () => {
+    if (!navigator.onLine) {
+      setStatus('offline');
+      return;
+    }
+    try {
+      setStatus('syncing');
+      await pushAll();
+      lastSync = new Date();
+      setStatus('synced');
+    } catch (err) {
+      console.error('[Garomax] sync error', err);
+      setStatus('error');
+    }
+  };
+
+  try {
+    setStatus('syncing');
+    // Initial sync: push everything then pull everything
+    await pushAll();
+    await pullAll();
+    lastSync = new Date();
+    setStatus('synced');
+  } catch (err) {
+    console.error('[Garomax] initial sync error', err);
+    setStatus('error');
+  }
+
+  subscribeRealtime();
+
+  // Safety-net push loop, in case a page write happens without calling
+  // requestSync() directly (e.g. future code paths).
+  pushTimer = setInterval(runSync, 5000);
+  window.addEventListener('online', runSync);
+  window.addEventListener('offline', () => setStatus('offline'));
+}
+
+/** Call after any local write for a near-instant push instead of waiting on the interval. */
+export function requestSync() {
+  if (!isSupabaseConfigured || !navigator.onLine) return;
+  pushAll()
+    .then(() => {
+      lastSync = new Date();
+      setStatus('synced');
+    })
+    .catch((err) => {
+      console.error('[Garomax] push error', err);
+      setStatus('error');
+    });
+}
+
+export function stopSync() {
+  if (pushTimer) clearInterval(pushTimer);
+  started = false;
+}
 </file>
 
 <file path="src/pages/KitchenDisplay.tsx">
@@ -6547,85 +6503,6 @@ export const StockMenuManager: React.FC = () => {
 };
 </file>
 
-<file path="src/types/index.ts">
-export type UserRole = 'admin' | 'cook' | 'waiter';
-
-export interface User {
-  user_id: string;
-  name: string;
-  role: UserRole;
-  pin_code: string;
-  active_shift: boolean;
-  basic_salary: number;
-}
-
-export interface Ingredient {
-  ingredient_id: string;
-  name: string;
-  unit: 'g' | 'kg' | 'ml' | 'l' | 'pcs';
-  quantity_on_hand: number;
-  last_purchase_cost: number;
-  low_stock_threshold: number;
-  synced?: boolean;
-}
-
-export interface RecipeItem {
-  dish_name: string;
-  selling_price: number;
-  ingredient_id: string;
-  quantity_per_plate: number;
-}
-
-export type PaymentStatus = 'active' | 'paid' | 'credit' | 'unpaid_loss';
-export type PaymentMethod = 'cash' | 'mpesa' | 'credit';
-export type KitchenStatus = 'queued' | 'ready';
-
-export interface OrderItem {
-  dish_name: string;
-  quantity: number;
-  unit_price: number;
-  selected_modifiers?: string[];
-}
-
-export interface Order {
-  order_id: string;
-  payment_status: PaymentStatus;
-  payment_method?: PaymentMethod;
-  mpesa_code?: string;
-  kitchen_status: KitchenStatus;
-  items: OrderItem[];
-  total_amount: number;
-  placed_by_waiter_id: string;
-  confirmed_by_cook_id?: string;
-  timestamp: string;
-  synced?: boolean;
-}
-
-export type WasteReason = 'burnt_overcooked' | 'spilled_dropped' | 'spoiled_raw';
-
-export interface WasteLog {
-  waste_id: string;
-  dish_or_ingredient: string;
-  quantity: number;
-  reason: WasteReason;
-  logged_by_cook_id: string;
-  deduction_flag: boolean;
-  timestamp: string;
-  synced?: boolean;
-}
-
-export interface StaffLedger {
-  ledger_id: string;
-  staff_id: string;
-  date: string;
-  shortage_amount: number;
-  spoilage_cost: number;
-  reason: string;
-  payroll_deduction_status: 'pending' | 'deducted' | 'waived';
-  synced?: boolean;
-}
-</file>
-
 <file path="src/App.tsx">
 import React from 'react';
 import { AuthProvider, useAuth } from './context/AuthContext';
@@ -6786,6 +6663,83 @@ export default defineConfig({
     allowedHosts: true,
   }
 });
+</file>
+
+<file path="src/db/kibandaDB.ts">
+import Dexie, { type Table } from 'dexie';
+import type { User, Ingredient, RecipeItem, Order, WasteLog, StaffLedger } from '../types';
+
+export class KibandaDatabase extends Dexie {
+  users!: Table<User>;
+  ingredients!: Table<Ingredient>;
+  recipes!: Table<RecipeItem>;
+  orders!: Table<Order>;
+  wasteLogs!: Table<WasteLog>;
+  staffLedgers!: Table<StaffLedger>;
+
+  constructor() {
+    super('GaromaxBitesDB');
+    
+    this.version(1).stores({
+      users: 'user_id, pin_code, role',
+      ingredients: 'ingredient_id, name',
+      recipes: '[dish_name+ingredient_id], dish_name, ingredient_id',
+      orders: 'order_id, payment_status, placed_by_waiter_id, timestamp, synced',
+      wasteLogs: 'waste_id, logged_by_cook_id, timestamp, synced',
+      staffLedgers: 'ledger_id, staff_id, date, synced'
+    });
+
+    // v2: kitchen prep status is now tracked separately from payment status,
+    // so "mark prepared" in the kitchen no longer closes the waiter's bill.
+    this.version(2).stores({
+      orders: 'order_id, payment_status, kitchen_status, placed_by_waiter_id, timestamp, synced',
+    }).upgrade(async (tx) => {
+      await tx.table('orders').toCollection().modify((order) => {
+        if (!order.kitchen_status) {
+          // Best-effort backfill: orders already marked paid under the old
+          // logic were also implicitly "prepared", so treat them as ready.
+          order.kitchen_status = order.payment_status === 'active' ? 'queued' : 'ready';
+        }
+      });
+    });
+
+    // v3: staff now have a basic salary so payroll can be computed
+    // automatically instead of an admin doing the maths by hand.
+    this.version(3).stores({
+      users: 'user_id, pin_code, role',
+    }).upgrade(async (tx) => {
+      await tx.table('users').toCollection().modify((user) => {
+        if (user.basic_salary === undefined) {
+          user.basic_salary = 0;
+        }
+        // Initialize synced flag for existing users
+        if (user.synced === undefined) {
+          user.synced = true;
+        }
+      });
+    });
+
+    // v4: Add synced flag for users and recipes to support proper sync
+    this.version(4).stores({
+      users: 'user_id, pin_code, role, synced',
+      ingredients: 'ingredient_id, name, synced',
+      recipes: '[dish_name+ingredient_id], dish_name, ingredient_id, synced',
+      orders: 'order_id, payment_status, kitchen_status, placed_by_waiter_id, timestamp, synced',
+      wasteLogs: 'waste_id, logged_by_cook_id, timestamp, synced',
+      staffLedgers: 'ledger_id, staff_id, date, synced'
+    }).upgrade(async (tx) => {
+      // Initialize synced for existing users and recipes
+      await tx.table('users').toCollection().modify((user) => {
+        if (user.synced === undefined) user.synced = true;
+      });
+      await tx.table('recipes').toCollection().modify((recipe) => {
+        if (recipe.synced === undefined) recipe.synced = true;
+      });
+    });
+  }
+}
+
+export const db = new KibandaDatabase();
 </file>
 
 <file path="src/pages/WaiterPOS.tsx">
@@ -7308,6 +7262,87 @@ export const WaiterPOS: React.FC = () => {
     </div>
   );
 };
+</file>
+
+<file path="src/types/index.ts">
+export type UserRole = 'admin' | 'cook' | 'waiter';
+
+export interface User {
+  user_id: string;
+  name: string;
+  role: UserRole;
+  pin_code: string;
+  active_shift: boolean;
+  basic_salary: number;
+  synced?: boolean;  // <-- ADD THIS
+}
+
+export interface Ingredient {
+  ingredient_id: string;
+  name: string;
+  unit: 'g' | 'kg' | 'ml' | 'l' | 'pcs';
+  quantity_on_hand: number;
+  last_purchase_cost: number;
+  low_stock_threshold: number;
+  synced?: boolean;
+}
+
+export interface RecipeItem {
+  dish_name: string;
+  selling_price: number;
+  ingredient_id: string;
+  quantity_per_plate: number;
+  synced?: boolean;  // <-- ADD THIS
+}
+
+export type PaymentStatus = 'active' | 'paid' | 'credit' | 'unpaid_loss';
+export type PaymentMethod = 'cash' | 'mpesa' | 'credit';
+export type KitchenStatus = 'queued' | 'ready';
+
+export interface OrderItem {
+  dish_name: string;
+  quantity: number;
+  unit_price: number;
+  selected_modifiers?: string[];
+}
+
+export interface Order {
+  order_id: string;
+  payment_status: PaymentStatus;
+  payment_method?: PaymentMethod;
+  mpesa_code?: string;
+  kitchen_status: KitchenStatus;
+  items: OrderItem[];
+  total_amount: number;
+  placed_by_waiter_id: string;
+  confirmed_by_cook_id?: string;
+  timestamp: string;
+  synced?: boolean;
+}
+
+export type WasteReason = 'burnt_overcooked' | 'spilled_dropped' | 'spoiled_raw';
+
+export interface WasteLog {
+  waste_id: string;
+  dish_or_ingredient: string;
+  quantity: number;
+  reason: WasteReason;
+  logged_by_cook_id: string;
+  deduction_flag: boolean;
+  timestamp: string;
+  synced?: boolean;
+}
+
+export interface StaffLedger {
+  ledger_id: string;
+  staff_id: string;
+  date: string;
+  shortage_amount: number;
+  spoilage_cost: number;
+  reason: string;
+  payroll_deduction_status: 'pending' | 'deducted' | 'waived';
+  synced?: boolean;
+}
 </file>
 
 <file path="src/pages/AdminDashboard.tsx">
