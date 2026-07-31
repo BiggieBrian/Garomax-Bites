@@ -1,10 +1,19 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db } from '../db/kibandaDB';
 import { requestSync } from '../db/sync';
 import { useAuth } from '../context/AuthContext';
 import { Check, Flame, Package, AlertTriangle, X } from 'lucide-react';
-import type { OrderItem, WasteReason } from '../types';
+import type { Ingredient, OrderItem, WasteReason } from '../types';
+
+// A branch's view of a shared ingredient: identity fields from `Ingredient`
+// joined with this branch's own quantity/cost/threshold from `IngredientStock`
+// (see StockMenuManager.tsx for the same join).
+type StockedIngredient = Ingredient & {
+  quantity_on_hand: number;
+  last_purchase_cost: number;
+  low_stock_threshold: number;
+};
 
 const WASTE_REASONS: { value: WasteReason; label: string; target: 'dish' | 'ingredient' }[] = [
   { value: 'burnt_overcooked', label: 'Burnt / Overcooked', target: 'dish' },
@@ -15,15 +24,36 @@ const WASTE_REASONS: { value: WasteReason; label: string; target: 'dish' | 'ingr
 export const KitchenDisplay: React.FC = () => {
   const { currentUser } = useAuth();
 
+  const myBranchId = currentUser?.branch_id ?? null;
+
   // Live query the kitchen queue by prep status — independent of whether the
   // waiter has collected payment yet. A ticket can be "ready" and still unpaid.
-  const orders = useLiveQuery(
+  const allQueuedOrders = useLiveQuery(
     () => db.orders.where('kitchen_status').equals('queued').reverse().toArray(),
     []
   );
+  const orders = allQueuedOrders?.filter((o) => o.branch_id === myBranchId);
 
-  const ingredients = useLiveQuery(() => db.ingredients.toArray(), []);
+  const ingredientDefs = useLiveQuery(() => db.ingredients.toArray(), []);
+  const allIngredientStock = useLiveQuery(() => db.ingredientStock.toArray(), []);
   const recipes = useLiveQuery(() => db.recipes.toArray(), []);
+
+  const ingredients: StockedIngredient[] = useMemo(() => {
+    const defMap = new Map((ingredientDefs ?? []).map((i) => [i.ingredient_id, i]));
+    return (allIngredientStock ?? [])
+      .filter((s) => s.branch_id === myBranchId)
+      .map((s) => {
+        const def = defMap.get(s.ingredient_id);
+        if (!def) return null;
+        return {
+          ...def,
+          quantity_on_hand: s.quantity_on_hand,
+          last_purchase_cost: s.last_purchase_cost,
+          low_stock_threshold: s.low_stock_threshold,
+        };
+      })
+      .filter((i): i is StockedIngredient => i !== null);
+  }, [ingredientDefs, allIngredientStock, myBranchId]);
 
   const dishes = Array.from(new Map((recipes ?? []).map((r) => [r.dish_name, r])).values());
 
@@ -60,7 +90,7 @@ export const KitchenDisplay: React.FC = () => {
 
   const handleLogWaste = async () => {
     setWasteError('');
-    if (!currentUser) return;
+    if (!currentUser || !myBranchId) return;
     const qty = parseFloat(wasteQty);
     if (!wasteTargetId) {
       setWasteError(wasteTargetKind === 'dish' ? 'Select a dish.' : 'Select an ingredient.');
@@ -80,7 +110,7 @@ export const KitchenDisplay: React.FC = () => {
       name = ing.name;
       cost = qty * ing.last_purchase_cost;
       // Raw stock spoiled before use — take it out of the shelf count now.
-      await db.ingredients.update(ing.ingredient_id, {
+      await db.ingredientStock.update([myBranchId, ing.ingredient_id], {
         quantity_on_hand: Math.max(0, ing.quantity_on_hand - qty),
         synced: false,
       });
@@ -93,6 +123,7 @@ export const KitchenDisplay: React.FC = () => {
 
     await db.wasteLogs.add({
       waste_id: crypto.randomUUID(),
+      branch_id: myBranchId,
       dish_or_ingredient: name,
       quantity: qty,
       reason: wasteReason,
@@ -106,6 +137,7 @@ export const KitchenDisplay: React.FC = () => {
       const reasonLabel = WASTE_REASONS.find((r) => r.value === wasteReason)?.label ?? wasteReason;
       await db.staffLedgers.add({
         ledger_id: crypto.randomUUID(),
+        branch_id: myBranchId,
         staff_id: currentUser.user_id,
         date: new Date().toISOString(),
         shortage_amount: 0,
@@ -123,7 +155,7 @@ export const KitchenDisplay: React.FC = () => {
 
   // Handle Mark as Prepared & Deplete Ingredients
   const handleCompleteOrder = async (orderId: string, items: OrderItem[]) => {
-    if (!recipes || !ingredients) return;
+    if (!recipes || !ingredients || !myBranchId) return;
 
     // 1. Deduct ingredients for every item in the ticket based on recipe mappings
     for (const item of items) {
@@ -138,9 +170,9 @@ export const KitchenDisplay: React.FC = () => {
 
         if (ingredientItem) {
           const newQty = Math.max(0, ingredientItem.quantity_on_hand - requiredAmount);
-          await db.ingredients
-            .where('ingredient_id')
-            .equals(ingredientItem.ingredient_id)
+          await db.ingredientStock
+            .where('[branch_id+ingredient_id]')
+            .equals([myBranchId, ingredientItem.ingredient_id])
             .modify({
               quantity_on_hand: newQty,
               synced: false,

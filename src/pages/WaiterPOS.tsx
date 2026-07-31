@@ -15,9 +15,11 @@ export const WaiterPOS: React.FC = () => {
 
   // Live queries from Dexie DB
   const recipes = useLiveQuery(() => db.recipes.toArray(), []);
-  const activeOrders = useLiveQuery(() => 
+  const myBranchId = currentUser?.branch_id ?? null;
+  const allActiveOrders = useLiveQuery(() => 
     db.orders.where('payment_status').equals('active').reverse().toArray(), []
   );
+  const activeOrders = allActiveOrders?.filter((o) => o.branch_id === myBranchId);
 
   // Get unique list of dishes from recipe mappings
   const dishes = Array.from(
@@ -70,10 +72,11 @@ export const WaiterPOS: React.FC = () => {
 
   // Send Order to Kitchen (Strictly Active/Unpaid)
   const handleSendToKitchen = async () => {
-    if (cart.length === 0 || !currentUser) return;
+    if (cart.length === 0 || !currentUser?.branch_id) return;
 
     const newOrder = {
       order_id: crypto.randomUUID(),
+      branch_id: currentUser.branch_id,
       payment_status: 'active' as const,
       kitchen_status: 'queued' as const,
       items: cart,
