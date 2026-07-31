@@ -1,4 +1,11 @@
-export type UserRole = 'admin' | 'cook' | 'waiter';
+export type UserRole = 'superadmin' | 'admin' | 'cook' | 'waiter';
+
+export interface Branch {
+  branch_id: string;
+  name: string;
+  location?: string;
+  synced?: boolean;
+}
 
 export interface User {
   user_id: string;
@@ -7,24 +14,53 @@ export interface User {
   pin_code: string;
   active_shift: boolean;
   basic_salary: number;
+  // null only for role === 'superadmin' — every other role belongs to exactly one branch.
+  branch_id: string | null;
   synced?: boolean;
 }
 
+// Shared identity — same ingredient exists once no matter how many branches stock it.
 export interface Ingredient {
   ingredient_id: string;
   name: string;
   unit: 'g' | 'kg' | 'ml' | 'l' | 'pcs';
+  synced?: boolean;
+}
+
+// Per-branch stock level for a shared ingredient.
+export interface IngredientStock {
+  branch_id: string;
+  ingredient_id: string;
   quantity_on_hand: number;
   last_purchase_cost: number;
   low_stock_threshold: number;
   synced?: boolean;
 }
 
+// Menu is shared across branches — unchanged from the single-branch schema.
 export interface RecipeItem {
   dish_name: string;
   selling_price: number;
   ingredient_id: string;
   quantity_per_plate: number;
+  synced?: boolean;
+}
+
+export type AssetCategory = 'furniture' | 'kitchenware' | 'cutlery' | 'electronics' | 'other';
+export type AssetCondition = 'good' | 'fair' | 'damaged' | 'lost';
+
+// Fixed assets — tables, chairs, sufurias, cups, spoons. Unlike Ingredient,
+// there's no shared-identity split: a physical chair belongs to exactly one
+// branch, so branch_id lives directly on the row.
+export interface FixedAsset {
+  asset_id: string;
+  branch_id: string;
+  name: string;
+  category: AssetCategory;
+  quantity: number;
+  unit_cost?: number;
+  condition: AssetCondition;
+  notes?: string;
   synced?: boolean;
 }
 
@@ -41,6 +77,7 @@ export interface OrderItem {
 
 export interface Order {
   order_id: string;
+  branch_id: string;
   payment_status: PaymentStatus;
   payment_method?: PaymentMethod;
   mpesa_code?: string;
@@ -57,6 +94,7 @@ export type WasteReason = 'burnt_overcooked' | 'spilled_dropped' | 'spoiled_raw'
 
 export interface WasteLog {
   waste_id: string;
+  branch_id: string;
   dish_or_ingredient: string;
   quantity: number;
   reason: WasteReason;
@@ -68,6 +106,7 @@ export interface WasteLog {
 
 export interface StaffLedger {
   ledger_id: string;
+  branch_id: string;
   staff_id: string;
   date: string;
   shortage_amount: number;
@@ -75,4 +114,17 @@ export interface StaffLedger {
   reason: string;
   payroll_deduction_status: 'pending' | 'deducted' | 'waived';
   synced?: boolean;
+}
+
+// One row per branch per month — mirrors the `monthly_branch_stats` SQL view,
+// queried directly from Supabase for the SuperAdmin Overview tab (not stored
+// locally in Dexie — this is a reporting view, not offline-first data).
+export interface MonthlyBranchStats {
+  branch_id: string;
+  month: string; // first-of-month date, e.g. "2026-07-01"
+  revenue: number;
+  cogs: number;
+  waste_units: number;
+  monthly_payroll: number;
+  shortages_and_spoilage_cost: number;
 }

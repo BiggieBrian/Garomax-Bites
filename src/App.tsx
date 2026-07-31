@@ -4,6 +4,7 @@ import { Login } from './pages/Login';
 import { WaiterPOS } from './pages/WaiterPOS';
 import { KitchenDisplay } from './pages/KitchenDisplay';
 import { AdminDashboard } from './pages/AdminDashboard';
+import { SuperAdminDashboard } from './pages/SuperAdminDashboard';
 import { LogOut, Cloud, CloudOff, RefreshCw, AlertTriangle } from 'lucide-react';
 import { useSyncStatus } from './hooks/useSyncStatus';
 
@@ -91,6 +92,8 @@ const DashboardSwitch: React.FC = () => {
         {currentUser.role === 'cook' && <KitchenDisplay/>}
 
         {currentUser.role === 'admin' && <AdminDashboard />}
+
+        {currentUser.role === 'superadmin' && <SuperAdminDashboard />}
       </main>
     </div>
   );

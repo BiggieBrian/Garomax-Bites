@@ -1,6 +1,7 @@
 import React, { useMemo, useState } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db } from '../db/kibandaDB';
+import { useActiveBranchId } from '../context/BranchScopeContext';
 import {
   requestSync,
   deleteIngredientRemote,
@@ -8,6 +9,14 @@ import {
   deleteRecipeLineRemote,
 } from '../db/sync';
 import type { Ingredient, RecipeItem } from '../types';
+
+// A branch's view of a shared ingredient: identity fields from `Ingredient`
+// joined with this branch's own quantity/cost/threshold from `IngredientStock`.
+type StockedIngredient = Ingredient & {
+  quantity_on_hand: number;
+  last_purchase_cost: number;
+  low_stock_threshold: number;
+};
 import { Pagination } from '../components/Pagination';
 import { usePagination } from '../components/usePagination';
 import { SearchInput } from '../components/SearchInput';
@@ -27,10 +36,34 @@ const money = (n: number) => `KES ${n.toLocaleString(undefined, { maximumFractio
 const UNITS: Ingredient['unit'][] = ['g', 'kg', 'ml', 'l', 'pcs'];
 
 export const StockMenuManager: React.FC = () => {
-  const ingredients = useLiveQuery(() => db.ingredients.toArray(), []);
+  const myBranchId = useActiveBranchId();
+
+  const ingredientDefs = useLiveQuery(() => db.ingredients.toArray(), []);
+  const allIngredientStock = useLiveQuery(() => db.ingredientStock.toArray(), []);
   const recipes = useLiveQuery(() => db.recipes.toArray(), []);
 
-  const ingredientMap = new Map((ingredients ?? []).map((i) => [i.ingredient_id, i]));
+  // Only ingredients this branch actually stocks — i.e. has a matching
+  // ingredientStock row for. (Sharing an existing ingredient definition
+  // into a second branch isn't wired up in this UI yet; each branch's
+  // "Add Ingredient" creates its own definition + stock row together.)
+  const ingredients: StockedIngredient[] = useMemo(() => {
+    const defMap = new Map((ingredientDefs ?? []).map((i) => [i.ingredient_id, i]));
+    return (allIngredientStock ?? [])
+      .filter((s) => s.branch_id === myBranchId)
+      .map((s) => {
+        const def = defMap.get(s.ingredient_id);
+        if (!def) return null;
+        return {
+          ...def,
+          quantity_on_hand: s.quantity_on_hand,
+          last_purchase_cost: s.last_purchase_cost,
+          low_stock_threshold: s.low_stock_threshold,
+        };
+      })
+      .filter((i): i is StockedIngredient => i !== null);
+  }, [ingredientDefs, allIngredientStock, myBranchId]);
+
+  const ingredientMap = new Map(ingredients.map((i) => [i.ingredient_id, i]));
 
   const dishes = useMemo(() => {
     const map = new Map<string, { dish_name: string; selling_price: number; lines: RecipeItem[] }>();
@@ -71,6 +104,7 @@ export const StockMenuManager: React.FC = () => {
 
   const handleAddIngredient = async () => {
     setIngError('');
+    if (!myBranchId) return setIngError('Your account has no branch assigned — contact the owner.');
     if (!ingName.trim()) return setIngError('Enter an ingredient name.');
     const qty = parseFloat(ingQty);
     const cost = parseFloat(ingCost);
@@ -79,10 +113,16 @@ export const StockMenuManager: React.FC = () => {
     if (isNaN(cost) || cost < 0) return setIngError('Enter a valid purchase cost.');
     if (isNaN(threshold) || threshold < 0) return setIngError('Enter a valid low-stock threshold.');
 
+    const ingredient_id = crypto.randomUUID();
     await db.ingredients.add({
-      ingredient_id: crypto.randomUUID(),
+      ingredient_id,
       name: ingName.trim(),
       unit: ingUnit,
+      synced: false,
+    });
+    await db.ingredientStock.add({
+      branch_id: myBranchId,
+      ingredient_id,
       quantity_on_hand: qty,
       last_purchase_cost: cost,
       low_stock_threshold: threshold,
@@ -96,17 +136,17 @@ export const StockMenuManager: React.FC = () => {
   // -------------------------------------------------------------------
   // Restock existing ingredient
   // -------------------------------------------------------------------
-  const [restockTarget, setRestockTarget] = useState<Ingredient | null>(null);
+  const [restockTarget, setRestockTarget] = useState<StockedIngredient | null>(null);
   const [restockQty, setRestockQty] = useState('');
   const [restockCost, setRestockCost] = useState('');
 
   const handleRestock = async () => {
-    if (!restockTarget) return;
+    if (!restockTarget || !myBranchId) return;
     const addQty = parseFloat(restockQty);
     if (isNaN(addQty) || addQty <= 0) return;
     const newCost = restockCost.trim() ? parseFloat(restockCost) : restockTarget.last_purchase_cost;
 
-    await db.ingredients.update(restockTarget.ingredient_id, {
+    await db.ingredientStock.update([myBranchId, restockTarget.ingredient_id], {
       quantity_on_hand: restockTarget.quantity_on_hand + addQty,
       last_purchase_cost: newCost,
       synced: false,
@@ -124,6 +164,7 @@ export const StockMenuManager: React.FC = () => {
 
   const handleDeleteIngredient = async (id: string) => {
     await db.ingredients.delete(id);
+    if (myBranchId) await db.ingredientStock.delete([myBranchId, id]);
     deleteIngredientRemote(id);
     setConfirmDeleteIngredient(null);
   };

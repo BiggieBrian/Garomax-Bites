@@ -60,6 +60,7 @@ src/
     react.svg
     vite.svg
   components/
+    BranchManager.tsx
     Pagination.tsx
     SearchInput.tsx
     usePagination.ts
@@ -75,9 +76,11 @@ src/
     supabase.ts
   pages/
     AdminDashboard.tsx
+    FixedAssetsManager.tsx
     KitchenDisplay.tsx
     Login.tsx
     StockMenuManager.tsx
+    SuperAdminDashboard.tsx
     WaiterPOS.tsx
   types/
     index.ts
@@ -114,6 +117,751 @@ vite.config.ts
 
 <files>
 This section contains the contents of the repository's files.
+
+<file path="src/components/BranchManager.tsx">
+import React, { useState } from 'react';
+import { useLiveQuery } from 'dexie-react-hooks';
+import { db } from '../db/kibandaDB';
+import { requestSync } from '../db/sync';
+import type { Branch } from '../types';
+import { Building2, Plus, Pencil, Check, X, MapPin } from 'lucide-react';
+
+function slugify(name: string): string {
+  return name
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/(^-|-$)/g, '') || 'branch';
+}
+
+export const BranchManager: React.FC = () => {
+  const branches = useLiveQuery(() => db.branches.toArray(), []) ?? [];
+
+  // -------------------------------------------------------------------
+  // Add branch
+  // -------------------------------------------------------------------
+  const [showAddForm, setShowAddForm] = useState(false);
+  const [name, setName] = useState('');
+  const [location, setLocation] = useState('');
+  const [error, setError] = useState('');
+
+  const resetAddForm = () => {
+    setName('');
+    setLocation('');
+    setError('');
+  };
+
+  const handleAddBranch = async () => {
+    setError('');
+    if (!name.trim()) return setError('Enter a branch name.');
+
+    const baseId = slugify(name);
+    let branchId = baseId;
+    let suffix = 2;
+    // Guard against two branches slugifying to the same id (e.g. two
+    // branches both named "Town Centre").
+    while (branches.some((b) => b.branch_id === branchId)) {
+      branchId = `${baseId}-${suffix}`;
+      suffix += 1;
+    }
+
+    await db.branches.add({
+      branch_id: branchId,
+      name: name.trim(),
+      location: location.trim() || undefined,
+      synced: false,
+    });
+    requestSync();
+    resetAddForm();
+    setShowAddForm(false);
+  };
+
+  // -------------------------------------------------------------------
+  // Rename / edit branch
+  // -------------------------------------------------------------------
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editName, setEditName] = useState('');
+  const [editLocation, setEditLocation] = useState('');
+
+  const startEditing = (branch: Branch) => {
+    setEditingId(branch.branch_id);
+    setEditName(branch.name);
+    setEditLocation(branch.location ?? '');
+  };
+
+  const cancelEditing = () => {
+    setEditingId(null);
+    setEditName('');
+    setEditLocation('');
+  };
+
+  const saveEditing = async () => {
+    if (!editingId || !editName.trim()) return;
+    await db.branches.update(editingId, {
+      name: editName.trim(),
+      location: editLocation.trim() || undefined,
+      synced: false,
+    });
+    requestSync();
+    cancelEditing();
+  };
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <Building2 className="w-4 h-4 text-orange-400" />
+          <h2 className="text-sm font-bold text-white uppercase tracking-wider">Branches</h2>
+        </div>
+        <button
+          onClick={() => setShowAddForm((v) => !v)}
+          className="flex items-center gap-1 text-xs font-medium bg-orange-500/10 text-orange-400 border border-orange-500/20 px-2.5 py-1.5 rounded-lg hover:bg-orange-500/20 transition active:scale-95"
+        >
+          <Plus className="w-3.5 h-3.5" />
+          Add Branch
+        </button>
+      </div>
+
+      {showAddForm && (
+        <div className="bg-zinc-900/80 border border-zinc-800/80 rounded-xl p-3 space-y-2">
+          <input
+            autoFocus
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder="Branch name (e.g. Westlands Branch)"
+            className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-sm text-zinc-100 placeholder:text-zinc-600 focus:outline-none focus:border-orange-500/50"
+          />
+          <input
+            value={location}
+            onChange={(e) => setLocation(e.target.value)}
+            placeholder="Location (optional)"
+            className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-sm text-zinc-100 placeholder:text-zinc-600 focus:outline-none focus:border-orange-500/50"
+          />
+          {error && <p className="text-xs text-red-400">{error}</p>}
+          <div className="flex gap-2 pt-1">
+            <button
+              onClick={handleAddBranch}
+              className="flex-1 bg-orange-500 text-white text-xs font-bold py-2 rounded-lg hover:bg-orange-400 transition active:scale-95"
+            >
+              Save Branch
+            </button>
+            <button
+              onClick={() => {
+                resetAddForm();
+                setShowAddForm(false);
+              }}
+              className="px-3 text-xs text-zinc-400 hover:text-white"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+
+      <div className="space-y-2">
+        {branches.length === 0 && (
+          <p className="text-xs text-zinc-500 text-center py-6">
+            No branches yet — add your first one above.
+          </p>
+        )}
+
+        {branches.map((branch) => (
+          <div
+            key={branch.branch_id}
+            className="bg-zinc-900/80 border border-zinc-800/80 rounded-xl p-3"
+          >
+            {editingId === branch.branch_id ? (
+              <div className="space-y-2">
+                <input
+                  autoFocus
+                  value={editName}
+                  onChange={(e) => setEditName(e.target.value)}
+                  className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-sm text-zinc-100 focus:outline-none focus:border-orange-500/50"
+                />
+                <input
+                  value={editLocation}
+                  onChange={(e) => setEditLocation(e.target.value)}
+                  placeholder="Location (optional)"
+                  className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-sm text-zinc-100 placeholder:text-zinc-600 focus:outline-none focus:border-orange-500/50"
+                />
+                <div className="flex gap-2">
+                  <button
+                    onClick={saveEditing}
+                    className="flex items-center gap-1 text-xs font-bold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 px-2.5 py-1.5 rounded-lg hover:bg-emerald-500/20 transition"
+                  >
+                    <Check className="w-3.5 h-3.5" />
+                    Save
+                  </button>
+                  <button
+                    onClick={cancelEditing}
+                    className="flex items-center gap-1 text-xs text-zinc-400 hover:text-white px-2.5 py-1.5"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm font-medium text-zinc-100">{branch.name}</p>
+                  {branch.location && (
+                    <p className="text-xs text-zinc-500 flex items-center gap-1 mt-0.5">
+                      <MapPin className="w-3 h-3" />
+                      {branch.location}
+                    </p>
+                  )}
+                  <p className="text-[10px] text-zinc-600 font-mono mt-1">{branch.branch_id}</p>
+                </div>
+                <button
+                  onClick={() => startEditing(branch)}
+                  className="p-1.5 rounded-lg bg-zinc-800/80 hover:bg-zinc-800 text-zinc-400 hover:text-white transition"
+                  title="Rename branch"
+                >
+                  <Pencil className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+};
+</file>
+
+<file path="src/pages/FixedAssetsManager.tsx">
+import React, { useMemo, useState } from 'react';
+import { useLiveQuery } from 'dexie-react-hooks';
+import { db } from '../db/kibandaDB';
+import { useAuth } from '../context/AuthContext';
+import { requestSync, deleteAssetRemote } from '../db/sync';
+import type { AssetCategory, AssetCondition, FixedAsset } from '../types';
+import { Pagination } from '../components/Pagination';
+import { usePagination } from '../components/usePagination';
+import { SearchInput } from '../components/SearchInput';
+import {
+  Boxes,
+  Plus,
+  X,
+  Trash2,
+  Pencil,
+  Check,
+  AlertTriangle,
+  Armchair,
+  UtensilsCrossed,
+  Coffee,
+  Zap,
+  Package,
+} from 'lucide-react';
+
+const money = (n: number) => `KES ${n.toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
+
+const CATEGORIES: AssetCategory[] = ['furniture', 'kitchenware', 'cutlery', 'electronics', 'other'];
+const CONDITIONS: AssetCondition[] = ['good', 'fair', 'damaged', 'lost'];
+
+const CATEGORY_ICON: Record<AssetCategory, typeof Armchair> = {
+  furniture: Armchair,
+  kitchenware: UtensilsCrossed,
+  cutlery: Coffee,
+  electronics: Zap,
+  other: Package,
+};
+
+const CONDITION_STYLE: Record<AssetCondition, string> = {
+  good: 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20',
+  fair: 'bg-amber-500/10 text-amber-400 border-amber-500/20',
+  damaged: 'bg-orange-500/10 text-orange-400 border-orange-500/20',
+  lost: 'bg-red-500/10 text-red-400 border-red-500/20',
+};
+
+export const FixedAssetsManager: React.FC = () => {
+  const { currentUser } = useAuth();
+  const myBranchId = currentUser?.branch_id ?? null;
+
+  const allAssets = useLiveQuery(() => db.fixedAssets.toArray(), []);
+  const assets = useMemo(
+    () => (allAssets ?? []).filter((a) => a.branch_id === myBranchId),
+    [allAssets, myBranchId]
+  );
+
+  const totalValue = useMemo(
+    () => assets.reduce((sum, a) => sum + a.quantity * (a.unit_cost ?? 0), 0),
+    [assets]
+  );
+  const flagged = useMemo(
+    () => assets.filter((a) => a.condition === 'damaged' || a.condition === 'lost'),
+    [assets]
+  );
+
+  // -------------------------------------------------------------------
+  // Add asset
+  // -------------------------------------------------------------------
+  const [showAddForm, setShowAddForm] = useState(false);
+  const [name, setName] = useState('');
+  const [category, setCategory] = useState<AssetCategory>('furniture');
+  const [quantity, setQuantity] = useState('');
+  const [unitCost, setUnitCost] = useState('');
+  const [condition, setCondition] = useState<AssetCondition>('good');
+  const [notes, setNotes] = useState('');
+  const [formError, setFormError] = useState('');
+
+  const resetForm = () => {
+    setName('');
+    setCategory('furniture');
+    setQuantity('');
+    setUnitCost('');
+    setCondition('good');
+    setNotes('');
+    setFormError('');
+  };
+
+  const handleAddAsset = async () => {
+    setFormError('');
+    if (!myBranchId) return setFormError('Your account has no branch assigned — contact the owner.');
+    if (!name.trim()) return setFormError('Enter an asset name.');
+    const qty = parseFloat(quantity);
+    if (isNaN(qty) || qty <= 0) return setFormError('Enter a valid quantity.');
+    const cost = unitCost.trim() ? parseFloat(unitCost) : undefined;
+    if (unitCost.trim() && (isNaN(cost as number) || (cost as number) < 0)) {
+      return setFormError('Enter a valid cost per unit, or leave it blank.');
+    }
+
+    await db.fixedAssets.add({
+      asset_id: crypto.randomUUID(),
+      branch_id: myBranchId,
+      name: name.trim(),
+      category,
+      quantity: qty,
+      unit_cost: cost,
+      condition,
+      notes: notes.trim() || undefined,
+      synced: false,
+    });
+    requestSync();
+    resetForm();
+    setShowAddForm(false);
+  };
+
+  // -------------------------------------------------------------------
+  // Edit asset — quantity, cost, condition, notes
+  // -------------------------------------------------------------------
+  const [editingAsset, setEditingAsset] = useState<FixedAsset | null>(null);
+  const [editQty, setEditQty] = useState('');
+  const [editCost, setEditCost] = useState('');
+  const [editCondition, setEditCondition] = useState<AssetCondition>('good');
+  const [editNotes, setEditNotes] = useState('');
+
+  const openEdit = (a: FixedAsset) => {
+    setEditingAsset(a);
+    setEditQty(String(a.quantity));
+    setEditCost(a.unit_cost !== undefined ? String(a.unit_cost) : '');
+    setEditCondition(a.condition);
+    setEditNotes(a.notes ?? '');
+  };
+
+  const handleSaveEdit = async () => {
+    if (!editingAsset) return;
+    const qty = parseFloat(editQty);
+    if (isNaN(qty) || qty < 0) return;
+    const cost = editCost.trim() ? parseFloat(editCost) : undefined;
+
+    await db.fixedAssets.update(editingAsset.asset_id, {
+      quantity: qty,
+      unit_cost: cost,
+      condition: editCondition,
+      notes: editNotes.trim() || undefined,
+      synced: false,
+    });
+    requestSync();
+    setEditingAsset(null);
+  };
+
+  // -------------------------------------------------------------------
+  // Delete asset
+  // -------------------------------------------------------------------
+  const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
+
+  const handleDelete = async (id: string) => {
+    await db.fixedAssets.delete(id);
+    deleteAssetRemote(id);
+    setConfirmDelete(null);
+  };
+
+  // -------------------------------------------------------------------
+  // Search + pagination
+  // -------------------------------------------------------------------
+  const [search, setSearch] = useState('');
+  const searched = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return q ? assets.filter((a) => a.name.toLowerCase().includes(q)) : assets;
+  }, [assets, search]);
+
+  const { page, setPage, totalPages, pageItems: pagedAssets } = usePagination(searched, 6);
+
+  return (
+    <div className="space-y-5">
+      <div className="relative bg-[#0f1117] border border-zinc-800/80 rounded-2xl p-4 shadow-xl space-y-3">
+        <div className="flex items-center justify-between border-b border-zinc-800/80 pb-2">
+          <div className="flex items-center gap-2">
+            <Boxes className="w-4 h-4 text-orange-400" />
+            <span className="font-mono text-xs font-bold text-zinc-300 uppercase tracking-wider">
+              Fixed Assets
+            </span>
+          </div>
+          <button
+            onClick={() => setShowAddForm(true)}
+            className="flex items-center gap-1 text-[10px] font-mono font-bold uppercase tracking-wider text-orange-400 bg-orange-500/10 border border-orange-500/30 px-2.5 py-1.5 rounded-lg active:scale-95 transition"
+          >
+            <Plus className="w-3 h-3" /> Add
+          </button>
+        </div>
+
+        <div className="flex items-center justify-between text-[10px] font-mono text-zinc-500">
+          <span>
+            Est. Value: <span className="text-zinc-300 font-bold">{money(totalValue)}</span>
+          </span>
+          {flagged.length > 0 && (
+            <span className="flex items-center gap-1 text-red-400">
+              <AlertTriangle className="w-3 h-3" />
+              {flagged.length} damaged/lost
+            </span>
+          )}
+        </div>
+
+        <div className="space-y-2">
+          {assets.length === 0 ? (
+            <p className="text-zinc-600 text-[11px] font-mono text-center py-6">
+              No fixed assets logged yet — add tables, chairs, sufurias, cups, spoons...
+            </p>
+          ) : (
+            <>
+              <SearchInput
+                value={search}
+                onChange={(v) => {
+                  setSearch(v);
+                  setPage(1);
+                }}
+                placeholder="Search assets..."
+              />
+              {searched.length === 0 && (
+                <p className="text-zinc-600 text-[11px] font-mono text-center py-6">No assets match your search</p>
+              )}
+              {pagedAssets.map((a) => {
+                const Icon = CATEGORY_ICON[a.category];
+                const isConfirming = confirmDelete === a.asset_id;
+                return (
+                  <div
+                    key={a.asset_id}
+                    className="p-2.5 rounded-xl border bg-zinc-900/60 border-zinc-800/60"
+                  >
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2 min-w-0">
+                        <div className="w-7 h-7 shrink-0 rounded-lg bg-zinc-800 flex items-center justify-center">
+                          <Icon className="w-3.5 h-3.5 text-zinc-400" />
+                        </div>
+                        <div className="min-w-0">
+                          <p className="text-xs font-medium text-white truncate">{a.name}</p>
+                          <p className="text-[10px] font-mono text-zinc-500">
+                            {a.quantity} unit{a.quantity !== 1 ? 's' : ''}
+                            {a.unit_cost !== undefined && ` · ${money(a.unit_cost)}/unit`}
+                          </p>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        <span
+                          className={`text-[9px] font-mono font-bold uppercase tracking-wider px-1.5 py-0.5 rounded border ${CONDITION_STYLE[a.condition]}`}
+                        >
+                          {a.condition}
+                        </span>
+                        <button
+                          onClick={() => openEdit(a)}
+                          title="Edit"
+                          className="p-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-300"
+                        >
+                          <Pencil className="w-3.5 h-3.5" />
+                        </button>
+                        <button
+                          onClick={() => setConfirmDelete(a.asset_id)}
+                          title="Delete"
+                          className="p-1.5 rounded-lg bg-zinc-800 hover:bg-red-500/20 text-zinc-400 hover:text-red-400"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    </div>
+
+                    {a.notes && <p className="text-[10px] font-mono text-zinc-600 mt-1.5">{a.notes}</p>}
+
+                    {isConfirming && (
+                      <div className="flex gap-2 mt-2 pt-2 border-t border-zinc-800/60">
+                        <button
+                          onClick={() => setConfirmDelete(null)}
+                          className="flex-1 py-1.5 bg-zinc-800 text-zinc-400 rounded-lg font-mono text-[10px] font-bold uppercase"
+                        >
+                          Cancel
+                        </button>
+                        <button
+                          onClick={() => handleDelete(a.asset_id)}
+                          className="flex-1 py-1.5 bg-red-500/20 text-red-400 border border-red-500/30 rounded-lg font-mono text-[10px] font-bold uppercase"
+                        >
+                          Confirm Delete
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+              <Pagination page={page} totalPages={totalPages} onPageChange={setPage} />
+            </>
+          )}
+        </div>
+      </div>
+
+      {/* Add Asset Modal */}
+      {showAddForm && (
+        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/70 backdrop-blur-sm p-4">
+          <div className="relative w-full max-w-sm bg-[#0f1117] border border-zinc-800 rounded-3xl p-5 shadow-2xl space-y-4 max-h-[85vh] overflow-y-auto">
+            <div className="flex items-center justify-between">
+              <h3 className="font-mono text-xs font-bold text-white uppercase tracking-wider">Add Asset</h3>
+              <button
+                onClick={() => {
+                  setShowAddForm(false);
+                  resetForm();
+                }}
+                className="p-1.5 rounded-lg bg-zinc-900 hover:bg-zinc-800 text-zinc-400 border border-zinc-800"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
+
+            <div className="space-y-3">
+              <div>
+                <label className="text-[10px] font-mono text-zinc-500 uppercase tracking-widest mb-1 block">
+                  Name
+                </label>
+                <input
+                  type="text"
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  placeholder="e.g. Plastic Chair, Sufuria (Large)"
+                  className="w-full bg-zinc-950 border border-zinc-700 rounded-xl px-3 py-2.5 text-xs text-white font-mono focus:outline-none focus:border-orange-500"
+                />
+              </div>
+
+              <div>
+                <label className="text-[10px] font-mono text-zinc-500 uppercase tracking-widest mb-1 block">
+                  Category
+                </label>
+                <div className="grid grid-cols-3 gap-1.5">
+                  {CATEGORIES.map((c) => (
+                    <button
+                      key={c}
+                      onClick={() => setCategory(c)}
+                      className={`py-2 text-[9px] font-mono font-bold uppercase rounded-lg border transition ${
+                        category === c
+                          ? 'bg-orange-500 text-zinc-950 border-orange-400'
+                          : 'bg-zinc-800 text-zinc-400 border-zinc-700'
+                      }`}
+                    >
+                      {c}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="text-[10px] font-mono text-zinc-500 uppercase tracking-widest mb-1 block">
+                    Quantity
+                  </label>
+                  <input
+                    type="number"
+                    inputMode="decimal"
+                    value={quantity}
+                    onChange={(e) => setQuantity(e.target.value)}
+                    placeholder="0"
+                    className="w-full bg-zinc-950 border border-zinc-700 rounded-xl px-3 py-2.5 text-xs text-white font-mono focus:outline-none focus:border-orange-500"
+                  />
+                </div>
+                <div>
+                  <label className="text-[10px] font-mono text-zinc-500 uppercase tracking-widest mb-1 block">
+                    Cost / Unit (optional)
+                  </label>
+                  <input
+                    type="number"
+                    inputMode="decimal"
+                    value={unitCost}
+                    onChange={(e) => setUnitCost(e.target.value)}
+                    placeholder="0"
+                    className="w-full bg-zinc-950 border border-zinc-700 rounded-xl px-3 py-2.5 text-xs text-white font-mono focus:outline-none focus:border-orange-500"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="text-[10px] font-mono text-zinc-500 uppercase tracking-widest mb-1 block">
+                  Condition
+                </label>
+                <div className="grid grid-cols-4 gap-1.5">
+                  {CONDITIONS.map((c) => (
+                    <button
+                      key={c}
+                      onClick={() => setCondition(c)}
+                      className={`py-2 text-[9px] font-mono font-bold uppercase rounded-lg border transition ${
+                        condition === c
+                          ? 'bg-orange-500 text-zinc-950 border-orange-400'
+                          : 'bg-zinc-800 text-zinc-400 border-zinc-700'
+                      }`}
+                    >
+                      {c}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div>
+                <label className="text-[10px] font-mono text-zinc-500 uppercase tracking-widest mb-1 block">
+                  Notes (optional)
+                </label>
+                <textarea
+                  value={notes}
+                  onChange={(e) => setNotes(e.target.value)}
+                  placeholder="e.g. Stored in back kitchen"
+                  rows={2}
+                  className="w-full bg-zinc-950 border border-zinc-700 rounded-xl px-3 py-2.5 text-xs text-white font-mono resize-none focus:outline-none focus:border-orange-500"
+                />
+              </div>
+
+              {formError && (
+                <p className="text-[11px] font-mono text-red-400 bg-red-500/10 border border-red-500/20 rounded-lg px-3 py-2">
+                  {formError}
+                </p>
+              )}
+            </div>
+
+            <button
+              onClick={handleAddAsset}
+              className="w-full py-3.5 bg-orange-500 hover:bg-orange-400 active:scale-[0.98] text-zinc-950 font-mono font-bold uppercase tracking-wider text-xs rounded-2xl transition shadow-lg shadow-orange-500/20"
+            >
+              Add Asset
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Edit Asset Modal */}
+      {editingAsset && (
+        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/70 backdrop-blur-sm p-4">
+          <div className="relative w-full max-w-sm bg-[#0f1117] border border-zinc-800 rounded-3xl p-5 shadow-2xl space-y-4">
+            <div className="flex items-center justify-between">
+              <h3 className="font-mono text-xs font-bold text-white uppercase tracking-wider">
+                Edit {editingAsset.name}
+              </h3>
+              <button
+                onClick={() => setEditingAsset(null)}
+                className="p-1.5 rounded-lg bg-zinc-900 hover:bg-zinc-800 text-zinc-400 border border-zinc-800"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
+
+            <div className="space-y-3">
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="text-[10px] font-mono text-zinc-500 uppercase tracking-widest mb-1 block">
+                    Quantity
+                  </label>
+                  <input
+                    type="number"
+                    inputMode="decimal"
+                    value={editQty}
+                    onChange={(e) => setEditQty(e.target.value)}
+                    className="w-full bg-zinc-950 border border-zinc-700 rounded-xl px-3 py-2.5 text-xs text-white font-mono focus:outline-none focus:border-orange-500"
+                  />
+                </div>
+                <div>
+                  <label className="text-[10px] font-mono text-zinc-500 uppercase tracking-widest mb-1 block">
+                    Cost / Unit
+                  </label>
+                  <input
+                    type="number"
+                    inputMode="decimal"
+                    value={editCost}
+                    onChange={(e) => setEditCost(e.target.value)}
+                    className="w-full bg-zinc-950 border border-zinc-700 rounded-xl px-3 py-2.5 text-xs text-white font-mono focus:outline-none focus:border-orange-500"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="text-[10px] font-mono text-zinc-500 uppercase tracking-widest mb-1 block">
+                  Condition
+                </label>
+                <div className="grid grid-cols-4 gap-1.5">
+                  {CONDITIONS.map((c) => (
+                    <button
+                      key={c}
+                      onClick={() => setEditCondition(c)}
+                      className={`py-2 text-[9px] font-mono font-bold uppercase rounded-lg border transition ${
+                        editCondition === c
+                          ? 'bg-orange-500 text-zinc-950 border-orange-400'
+                          : 'bg-zinc-800 text-zinc-400 border-zinc-700'
+                      }`}
+                    >
+                      {c}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div>
+                <label className="text-[10px] font-mono text-zinc-500 uppercase tracking-widest mb-1 block">
+                  Notes
+                </label>
+                <textarea
+                  value={editNotes}
+                  onChange={(e) => setEditNotes(e.target.value)}
+                  rows={2}
+                  className="w-full bg-zinc-950 border border-zinc-700 rounded-xl px-3 py-2.5 text-xs text-white font-mono resize-none focus:outline-none focus:border-orange-500"
+                />
+              </div>
+            </div>
+
+            <button
+              onClick={handleSaveEdit}
+              className="w-full py-3.5 bg-orange-500 hover:bg-orange-400 active:scale-[0.98] text-zinc-950 font-mono font-bold uppercase tracking-wider text-xs rounded-2xl transition shadow-lg shadow-orange-500/20"
+            >
+              <Check className="w-3.5 h-3.5 inline -mt-0.5 mr-1" /> Save Changes
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+</file>
+
+<file path="src/pages/SuperAdminDashboard.tsx">
+import React from 'react';
+import { BranchManager } from '../components/BranchManager';
+
+/**
+ * SuperAdmin's home screen. Starts with just Branches — the immediate need
+ * (the owner has to be able to create/name branches before anything else
+ * multi-branch makes sense). Overview (combined sales/profit across
+ * branches), Staff, Stock, and Payroll tabs land here next, each defaulting
+ * to a branch-switcher/drill-down view except Overview, which stays combined
+ * (see the multi-branch design discussion for why).
+ */
+export const SuperAdminDashboard: React.FC = () => {
+  return (
+    <div className="space-y-4">
+      <BranchManager />
+    </div>
+  );
+};
+</file>
 
 <file path="dev-dist/registerSW.js">
 if('serviceWorker' in navigator) navigator.serviceWorker.register('/dev-sw.js?dev-sw', { scope: '/', type: 'classic' })
@@ -3722,10 +4470,6 @@ define(['exports'], (function (exports) { 'use strict';
 }));
 </file>
 
-<file path="public/favicon.svg">
-<svg xmlns="http://www.w3.org/2000/svg" width="48" height="46" fill="none" viewBox="0 0 48 46"><path fill="#863bff" d="M25.946 44.938c-.664.845-2.021.375-2.021-.698V33.937a2.26 2.26 0 0 0-2.262-2.262H10.287c-.92 0-1.456-1.04-.92-1.788l7.48-10.471c1.07-1.497 0-3.578-1.842-3.578H1.237c-.92 0-1.456-1.04-.92-1.788L10.013.474c.214-.297.556-.474.92-.474h28.894c.92 0 1.456 1.04.92 1.788l-7.48 10.471c-1.07 1.498 0 3.579 1.842 3.579h11.377c.943 0 1.473 1.088.89 1.83L25.947 44.94z" style="fill:#863bff;fill:color(display-p3 .5252 .23 1);fill-opacity:1"/><mask id="a" width="48" height="46" x="0" y="0" maskUnits="userSpaceOnUse" style="mask-type:alpha"><path fill="#000" d="M25.842 44.938c-.664.844-2.021.375-2.021-.698V33.937a2.26 2.26 0 0 0-2.262-2.262H10.183c-.92 0-1.456-1.04-.92-1.788l7.48-10.471c1.07-1.498 0-3.579-1.842-3.579H1.133c-.92 0-1.456-1.04-.92-1.787L9.91.473c.214-.297.556-.474.92-.474h28.894c.92 0 1.456 1.04.92 1.788l-7.48 10.471c-1.07 1.498 0 3.578 1.842 3.578h11.377c.943 0 1.473 1.088.89 1.832L25.843 44.94z" style="fill:#000;fill-opacity:1"/></mask><g mask="url(#a)"><g filter="url(#b)"><ellipse cx="5.508" cy="14.704" fill="#ede6ff" rx="5.508" ry="14.704" style="fill:#ede6ff;fill:color(display-p3 .9275 .9033 1);fill-opacity:1" transform="matrix(.00324 1 1 -.00324 -4.47 31.516)"/></g><g filter="url(#c)"><ellipse cx="10.399" cy="29.851" fill="#ede6ff" rx="10.399" ry="29.851" style="fill:#ede6ff;fill:color(display-p3 .9275 .9033 1);fill-opacity:1" transform="matrix(.00324 1 1 -.00324 -39.328 7.883)"/></g><g filter="url(#d)"><ellipse cx="5.508" cy="30.487" fill="#7e14ff" rx="5.508" ry="30.487" style="fill:#7e14ff;fill:color(display-p3 .4922 .0767 1);fill-opacity:1" transform="rotate(89.814 -25.913 -14.639)scale(1 -1)"/></g><g filter="url(#e)"><ellipse cx="5.508" cy="30.599" fill="#7e14ff" rx="5.508" ry="30.599" style="fill:#7e14ff;fill:color(display-p3 .4922 .0767 1);fill-opacity:1" transform="rotate(89.814 -32.644 -3.334)scale(1 -1)"/></g><g filter="url(#f)"><ellipse cx="5.508" cy="30.599" fill="#7e14ff" rx="5.508" ry="30.599" style="fill:#7e14ff;fill:color(display-p3 .4922 .0767 1);fill-opacity:1" transform="matrix(.00324 1 1 -.00324 -34.34 30.47)"/></g><g filter="url(#g)"><ellipse cx="14.072" cy="22.078" fill="#ede6ff" rx="14.072" ry="22.078" style="fill:#ede6ff;fill:color(display-p3 .9275 .9033 1);fill-opacity:1" transform="rotate(93.35 24.506 48.493)scale(-1 1)"/></g><g filter="url(#h)"><ellipse cx="3.47" cy="21.501" fill="#7e14ff" rx="3.47" ry="21.501" style="fill:#7e14ff;fill:color(display-p3 .4922 .0767 1);fill-opacity:1" transform="rotate(89.009 28.708 47.59)scale(-1 1)"/></g><g filter="url(#i)"><ellipse cx="3.47" cy="21.501" fill="#7e14ff" rx="3.47" ry="21.501" style="fill:#7e14ff;fill:color(display-p3 .4922 .0767 1);fill-opacity:1" transform="rotate(89.009 28.708 47.59)scale(-1 1)"/></g><g filter="url(#j)"><ellipse cx=".387" cy="8.972" fill="#7e14ff" rx="4.407" ry="29.108" style="fill:#7e14ff;fill:color(display-p3 .4922 .0767 1);fill-opacity:1" transform="rotate(39.51 .387 8.972)"/></g><g filter="url(#k)"><ellipse cx="47.523" cy="-6.092" fill="#7e14ff" rx="4.407" ry="29.108" style="fill:#7e14ff;fill:color(display-p3 .4922 .0767 1);fill-opacity:1" transform="rotate(37.892 47.523 -6.092)"/></g><g filter="url(#l)"><ellipse cx="41.412" cy="6.333" fill="#47bfff" rx="5.971" ry="9.665" style="fill:#47bfff;fill:color(display-p3 .2799 .748 1);fill-opacity:1" transform="rotate(37.892 41.412 6.333)"/></g><g filter="url(#m)"><ellipse cx="-1.879" cy="38.332" fill="#7e14ff" rx="4.407" ry="29.108" style="fill:#7e14ff;fill:color(display-p3 .4922 .0767 1);fill-opacity:1" transform="rotate(37.892 -1.88 38.332)"/></g><g filter="url(#n)"><ellipse cx="-1.879" cy="38.332" fill="#7e14ff" rx="4.407" ry="29.108" style="fill:#7e14ff;fill:color(display-p3 .4922 .0767 1);fill-opacity:1" transform="rotate(37.892 -1.88 38.332)"/></g><g filter="url(#o)"><ellipse cx="35.651" cy="29.907" fill="#7e14ff" rx="4.407" ry="29.108" style="fill:#7e14ff;fill:color(display-p3 .4922 .0767 1);fill-opacity:1" transform="rotate(37.892 35.651 29.907)"/></g><g filter="url(#p)"><ellipse cx="38.418" cy="32.4" fill="#47bfff" rx="5.971" ry="15.297" style="fill:#47bfff;fill:color(display-p3 .2799 .748 1);fill-opacity:1" transform="rotate(37.892 38.418 32.4)"/></g></g><defs><filter id="b" width="60.045" height="41.654" x="-19.77" y="16.149" color-interpolation-filters="sRGB" filterUnits="userSpaceOnUse"><feFlood flood-opacity="0" result="BackgroundImageFix"/><feBlend in="SourceGraphic" in2="BackgroundImageFix" result="shape"/><feGaussianBlur result="effect1_foregroundBlur_2002_17158" stdDeviation="7.659"/></filter><filter id="c" width="90.34" height="51.437" x="-54.613" y="-7.533" color-interpolation-filters="sRGB" filterUnits="userSpaceOnUse"><feFlood flood-opacity="0" result="BackgroundImageFix"/><feBlend in="SourceGraphic" in2="BackgroundImageFix" result="shape"/><feGaussianBlur result="effect1_foregroundBlur_2002_17158" stdDeviation="7.659"/></filter><filter id="d" width="79.355" height="29.4" x="-49.64" y="2.03" color-interpolation-filters="sRGB" filterUnits="userSpaceOnUse"><feFlood flood-opacity="0" result="BackgroundImageFix"/><feBlend in="SourceGraphic" in2="BackgroundImageFix" result="shape"/><feGaussianBlur result="effect1_foregroundBlur_2002_17158" stdDeviation="4.596"/></filter><filter id="e" width="79.579" height="29.4" x="-45.045" y="20.029" color-interpolation-filters="sRGB" filterUnits="userSpaceOnUse"><feFlood flood-opacity="0" result="BackgroundImageFix"/><feBlend in="SourceGraphic" in2="BackgroundImageFix" result="shape"/><feGaussianBlur result="effect1_foregroundBlur_2002_17158" stdDeviation="4.596"/></filter><filter id="f" width="79.579" height="29.4" x="-43.513" y="21.178" color-interpolation-filters="sRGB" filterUnits="userSpaceOnUse"><feFlood flood-opacity="0" result="BackgroundImageFix"/><feBlend in="SourceGraphic" in2="BackgroundImageFix" result="shape"/><feGaussianBlur result="effect1_foregroundBlur_2002_17158" stdDeviation="4.596"/></filter><filter id="g" width="74.749" height="58.852" x="15.756" y="-17.901" color-interpolation-filters="sRGB" filterUnits="userSpaceOnUse"><feFlood flood-opacity="0" result="BackgroundImageFix"/><feBlend in="SourceGraphic" in2="BackgroundImageFix" result="shape"/><feGaussianBlur result="effect1_foregroundBlur_2002_17158" stdDeviation="7.659"/></filter><filter id="h" width="61.377" height="25.362" x="23.548" y="2.284" color-interpolation-filters="sRGB" filterUnits="userSpaceOnUse"><feFlood flood-opacity="0" result="BackgroundImageFix"/><feBlend in="SourceGraphic" in2="BackgroundImageFix" result="shape"/><feGaussianBlur result="effect1_foregroundBlur_2002_17158" stdDeviation="4.596"/></filter><filter id="i" width="61.377" height="25.362" x="23.548" y="2.284" color-interpolation-filters="sRGB" filterUnits="userSpaceOnUse"><feFlood flood-opacity="0" result="BackgroundImageFix"/><feBlend in="SourceGraphic" in2="BackgroundImageFix" result="shape"/><feGaussianBlur result="effect1_foregroundBlur_2002_17158" stdDeviation="4.596"/></filter><filter id="j" width="56.045" height="63.649" x="-27.636" y="-22.853" color-interpolation-filters="sRGB" filterUnits="userSpaceOnUse"><feFlood flood-opacity="0" result="BackgroundImageFix"/><feBlend in="SourceGraphic" in2="BackgroundImageFix" result="shape"/><feGaussianBlur result="effect1_foregroundBlur_2002_17158" stdDeviation="4.596"/></filter><filter id="k" width="54.814" height="64.646" x="20.116" y="-38.415" color-interpolation-filters="sRGB" filterUnits="userSpaceOnUse"><feFlood flood-opacity="0" result="BackgroundImageFix"/><feBlend in="SourceGraphic" in2="BackgroundImageFix" result="shape"/><feGaussianBlur result="effect1_foregroundBlur_2002_17158" stdDeviation="4.596"/></filter><filter id="l" width="33.541" height="35.313" x="24.641" y="-11.323" color-interpolation-filters="sRGB" filterUnits="userSpaceOnUse"><feFlood flood-opacity="0" result="BackgroundImageFix"/><feBlend in="SourceGraphic" in2="BackgroundImageFix" result="shape"/><feGaussianBlur result="effect1_foregroundBlur_2002_17158" stdDeviation="4.596"/></filter><filter id="m" width="54.814" height="64.646" x="-29.286" y="6.009" color-interpolation-filters="sRGB" filterUnits="userSpaceOnUse"><feFlood flood-opacity="0" result="BackgroundImageFix"/><feBlend in="SourceGraphic" in2="BackgroundImageFix" result="shape"/><feGaussianBlur result="effect1_foregroundBlur_2002_17158" stdDeviation="4.596"/></filter><filter id="n" width="54.814" height="64.646" x="-29.286" y="6.009" color-interpolation-filters="sRGB" filterUnits="userSpaceOnUse"><feFlood flood-opacity="0" result="BackgroundImageFix"/><feBlend in="SourceGraphic" in2="BackgroundImageFix" result="shape"/><feGaussianBlur result="effect1_foregroundBlur_2002_17158" stdDeviation="4.596"/></filter><filter id="o" width="54.814" height="64.646" x="8.244" y="-2.416" color-interpolation-filters="sRGB" filterUnits="userSpaceOnUse"><feFlood flood-opacity="0" result="BackgroundImageFix"/><feBlend in="SourceGraphic" in2="BackgroundImageFix" result="shape"/><feGaussianBlur result="effect1_foregroundBlur_2002_17158" stdDeviation="4.596"/></filter><filter id="p" width="39.409" height="43.623" x="18.713" y="10.588" color-interpolation-filters="sRGB" filterUnits="userSpaceOnUse"><feFlood flood-opacity="0" result="BackgroundImageFix"/><feBlend in="SourceGraphic" in2="BackgroundImageFix" result="shape"/><feGaussianBlur result="effect1_foregroundBlur_2002_17158" stdDeviation="4.596"/></filter></defs></svg>
-</file>
-
 <file path="public/icons.svg">
 <svg xmlns="http://www.w3.org/2000/svg">
   <symbol id="bluesky-icon" viewBox="0 0 16 17">
@@ -4402,6 +5146,16 @@ export default defineConfig([
 }
 </file>
 
+<file path="public/favicon.svg">
+<?xml version="1.0" encoding="UTF-8"?>
+<svg version="1.1" xmlns="http://www.w3.org/2000/svg" width="512" height="512">
+<path d="M0 0 C168.96 0 337.92 0 512 0 C512 168.96 512 337.92 512 512 C343.04 512 174.08 512 0 512 C0 343.04 0 174.08 0 0 Z " fill="#0F1116" transform="translate(0,0)"/>
+<path d="M0 0 C168.96 0 337.92 0 512 0 C512 168.96 512 337.92 512 512 C343.04 512 174.08 512 0 512 C0 343.04 0 174.08 0 0 Z M32 32 C32 180.17 32 328.34 32 481 C180.17 481 328.34 481 481 481 C481 332.83 481 184.66 481 32 C332.83 32 184.66 32 32 32 Z " fill="#0F1117" transform="translate(0,0)"/>
+<path d="M0 0 C1 1 1 1 1.11352539 4.87719727 C1.11336621 6.60694167 1.10766849 8.33669081 1.09765625 10.06640625 C1.09553383 11.42934059 1.09553383 11.42934059 1.09336853 12.81980896 C1.08775193 15.73407221 1.07519665 18.64825981 1.0625 21.5625 C1.05748714 23.53320202 1.05292386 25.50390524 1.04882812 27.47460938 C1.03777711 32.31643559 1.02050138 37.15820495 1 42 C-2.44719495 40.88233079 -5.80526988 39.71911799 -9.109375 38.23046875 C-19.8835257 33.47377726 -30.54013948 29.72022584 -42 27 C-42.97324219 26.75378906 -43.94648438 26.50757813 -44.94921875 26.25390625 C-59.83072325 23.10380676 -77.46732694 23.46957156 -92 28 C-92.88300781 28.26683594 -93.76601562 28.53367188 -94.67578125 28.80859375 C-110.3679999 34.29965004 -119.36277065 45.73321598 -126.30078125 60.09765625 C-134.47556578 78.1442131 -133.58854957 105.25970089 -127.17211914 123.61621094 C-121.54025088 138.53719923 -111.92132909 148.90337976 -97.484375 155.640625 C-81.28770618 161.95950476 -62.8333666 161.47314943 -46 158 C-44.35 157.67 -42.7 157.34 -41 157 C-41 143.47 -41 129.94 -41 116 C-51.56 116 -62.12 116 -73 116 C-73 104.45 -73 92.9 -73 81 C-45.94 81 -18.88 81 9 81 C9 113.67 9 146.34 9 180 C-6.16083174 186.99730696 -6.16083174 186.99730696 -12.8125 189.125 C-13.57691406 189.37161377 -14.34132813 189.61822754 -15.12890625 189.87231445 C-17.41463663 190.59772164 -19.70545522 191.30303266 -22 192 C-23.25167969 192.38285156 -24.50335938 192.76570312 -25.79296875 193.16015625 C-62.43126282 203.31386683 -104.99673605 202.95107771 -138.94262695 184.66503906 C-161.90739823 171.5915825 -176.64912223 150.07251773 -183.57470703 124.91210938 C-190.11830276 98.84169621 -189.56654105 68.5905283 -178 44 C-177.44699219 42.80246094 -176.89398438 41.60492188 -176.32421875 40.37109375 C-165.12031918 17.2418088 -145.03932624 1.88432508 -121.42578125 -7.40625 C-82.59337104 -20.01603634 -37.20975791 -16.12422843 0 0 Z " fill="#F77216" transform="translate(342,163)"/>
+<path d="M0 0 C148.17 0 296.34 0 449 0 C449 148.17 449 296.34 449 449 C300.83 449 152.66 449 0 449 C0 300.83 0 152.66 0 0 Z M10 10 C10 151.57 10 293.14 10 439 C151.57 439 293.14 439 439 439 C439 297.43 439 155.86 439 10 C297.43 10 155.86 10 10 10 Z " fill="#F97316" transform="translate(32,32)"/>
+</svg>
+</file>
+
 <file path="src/pages/Login.tsx">
 import React, { useState } from 'react';
 import { useAuth } from '../context/AuthContext';
@@ -4532,90 +5286,6 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
 )
 </file>
 
-<file path="supabase/schema.sql">
--- Garomax Bites — Supabase schema
--- Run this in the Supabase SQL editor (Project → SQL Editor → New query)
-
-create table if not exists users (
-  user_id text primary key,
-  name text not null,
-  role text not null check (role in ('admin', 'cook', 'waiter')),
-  pin_code text not null,
-  active_shift boolean not null default true,
-  basic_salary numeric not null default 0
-);
-
-create table if not exists ingredients (
-  ingredient_id text primary key,
-  name text not null,
-  unit text not null check (unit in ('g', 'kg', 'ml', 'l', 'pcs')),
-  quantity_on_hand numeric not null default 0,
-  last_purchase_cost numeric not null default 0,
-  low_stock_threshold numeric not null default 0
-);
-
-create table if not exists recipes (
-  dish_name text not null,
-  ingredient_id text not null references ingredients(ingredient_id) on delete cascade,
-  selling_price numeric not null,
-  quantity_per_plate numeric not null,
-  primary key (dish_name, ingredient_id)
-);
-
-create table if not exists orders (
-  order_id text primary key,
-  payment_status text not null check (payment_status in ('active', 'paid', 'credit', 'unpaid_loss')),
-  payment_method text check (payment_method in ('cash', 'mpesa', 'credit')),
-  mpesa_code text,
-  items jsonb not null,
-  total_amount numeric not null,
-  placed_by_waiter_id text not null references users(user_id),
-  confirmed_by_cook_id text references users(user_id),
-  ts timestamptz not null
-);
-
-create table if not exists waste_logs (
-  waste_id text primary key,
-  dish_or_ingredient text not null,
-  quantity numeric not null,
-  reason text not null check (reason in ('burnt_overcooked', 'spilled_dropped', 'spoiled_raw')),
-  logged_by_cook_id text not null references users(user_id),
-  deduction_flag boolean not null default false,
-  ts timestamptz not null
-);
-
-create table if not exists staff_ledgers (
-  ledger_id text primary key,
-  staff_id text not null references users(user_id),
-  date timestamptz not null,
-  shortage_amount numeric not null default 0,
-  spoilage_cost numeric not null default 0,
-  reason text not null,
-  payroll_deduction_status text not null check (payroll_deduction_status in ('pending', 'deducted', 'waived'))
-);
-
--- Realtime: let all clients subscribe to row-level changes for cross-device sync
-alter publication supabase_realtime add table orders, ingredients, waste_logs, staff_ledgers, users, recipes;
-
--- RLS: enabled with permissive policies for now, since staff auth is PIN-based (not Supabase Auth)
--- and every device shares one anon key. This is fine for a single-location internal tool but is
--- NOT safe if the anon key could ever be exposed to the public internet without restriction —
--- tighten this later if you add real user accounts.
-alter table users enable row level security;
-alter table ingredients enable row level security;
-alter table recipes enable row level security;
-alter table orders enable row level security;
-alter table waste_logs enable row level security;
-alter table staff_ledgers enable row level security;
-
-create policy "allow all - users" on users for all using (true) with check (true);
-create policy "allow all - ingredients" on ingredients for all using (true) with check (true);
-create policy "allow all - recipes" on recipes for all using (true) with check (true);
-create policy "allow all - orders" on orders for all using (true) with check (true);
-create policy "allow all - waste_logs" on waste_logs for all using (true) with check (true);
-create policy "allow all - staff_ledgers" on staff_ledgers for all using (true) with check (true);
-</file>
-
 <file path=".gitignore">
 # Logs
 logs
@@ -4642,26 +5312,6 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
-</file>
-
-<file path="index.html">
-<!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
-    <link rel="apple-touch-icon" href="/pwa-192x192.png" />
-    <meta name="theme-color" content="#0f1117" />
-    <meta name="apple-mobile-web-app-capable" content="yes" />
-    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
-    <title>Garomax Bites</title>
-  </head>
-  <body>
-    <div id="root"></div>
-    <script type="module" src="/src/main.tsx"></script>
-  </body>
-</html>
 </file>
 
 <file path="package.json">
@@ -4782,468 +5432,6 @@ export default defineConfig([
 ])
 
 ```
-</file>
-
-<file path="src/db/seedLocalData.ts">
-import { db } from './kibandaDB';
-
-export async function seedInitialData() {
-  const userCount = await db.users.count();
-  if (userCount === 0) {
-    // Seed default staff with synced: false so they get uploaded
-    await db.users.bulkAdd([
-      { user_id: '1', name: 'Garomax Owner', role: 'admin', pin_code: '0000', active_shift: true, basic_salary: 0, synced: false },
-      { user_id: '2', name: 'Chef James', role: 'cook', pin_code: '1111', active_shift: true, basic_salary: 15000, synced: false },
-      { user_id: '3', name: 'Waitstaff Mary', role: 'waiter', pin_code: '2222', active_shift: true, basic_salary: 12000, synced: false },
-    ]);
-
-    // Seed default ingredients with synced: false
-    await db.ingredients.bulkAdd([
-      { ingredient_id: 'i1', name: 'Unga (Maize Flour)', unit: 'kg', quantity_on_hand: 25, last_purchase_cost: 150, low_stock_threshold: 5, synced: false },
-      { ingredient_id: 'i2', name: 'Potatoes (Viazi)', unit: 'kg', quantity_on_hand: 40, last_purchase_cost: 100, low_stock_threshold: 10, synced: false },
-      { ingredient_id: 'i3', name: 'Cooking Oil', unit: 'l', quantity_on_hand: 15, last_purchase_cost: 250, low_stock_threshold: 3, synced: false },
-    ]);
-
-    // Seed default recipes with synced: false
-    await db.recipes.bulkAdd([
-      { dish_name: 'Ugali', selling_price: 50, ingredient_id: 'i1', quantity_per_plate: 0.2, synced: false },
-      { dish_name: 'Chips', selling_price: 120, ingredient_id: 'i2', quantity_per_plate: 0.3, synced: false },
-      { dish_name: 'Chips', selling_price: 120, ingredient_id: 'i3', quantity_per_plate: 0.05, synced: false },
-    ]);
-
-    console.log('Garomax Bites local IndexedDB seeded!');
-  }
-}
-</file>
-
-<file path="src/db/sync.ts">
-import { supabase, isSupabaseConfigured } from '../lib/supabase';
-import { db } from './kibandaDB';
-import type {
-  User,
-  Ingredient,
-  RecipeItem,
-  Order,
-  WasteLog,
-  StaffLedger,
-} from '../types';
-
-export type SyncStatus = 'offline' | 'syncing' | 'synced' | 'error';
-
-type Listener = (status: SyncStatus, lastSync: Date | null) => void;
-
-let currentStatus: SyncStatus = isSupabaseConfigured ? 'offline' : 'offline';
-let lastSync: Date | null = null;
-const listeners = new Set<Listener>();
-
-function setStatus(status: SyncStatus) {
-  currentStatus = status;
-  listeners.forEach((l) => l(currentStatus, lastSync));
-}
-
-export function onSyncStatusChange(cb: Listener): () => void {
-  listeners.add(cb);
-  cb(currentStatus, lastSync);
-  return () => listeners.delete(cb);
-}
-
-// ---------------------------------------------------------------------------
-// Row <-> local type mapping. Orders and WasteLog store their date under
-// `timestamp` locally, but the Postgres column is called `ts` (avoids the
-// reserved-word-flavoured `timestamp` name in SQL).
-// ---------------------------------------------------------------------------
-
-const orderToRow = (o: Order) => ({
-  order_id: o.order_id,
-  payment_status: o.payment_status,
-  payment_method: o.payment_method ?? null,
-  mpesa_code: o.mpesa_code ?? null,
-  kitchen_status: o.kitchen_status,
-  items: o.items,
-  total_amount: o.total_amount,
-  placed_by_waiter_id: o.placed_by_waiter_id,
-  confirmed_by_cook_id: o.confirmed_by_cook_id ?? null,
-  ts: o.timestamp,
-});
-
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-const orderFromRow = (r: any): Order => ({
-  order_id: r.order_id,
-  payment_status: r.payment_status,
-  payment_method: r.payment_method ?? undefined,
-  mpesa_code: r.mpesa_code ?? undefined,
-  kitchen_status: r.kitchen_status ?? 'queued',
-  items: r.items,
-  total_amount: r.total_amount,
-  placed_by_waiter_id: r.placed_by_waiter_id,
-  confirmed_by_cook_id: r.confirmed_by_cook_id ?? undefined,
-  timestamp: r.ts,
-  synced: true,
-});
-
-const wasteToRow = (w: WasteLog) => ({
-  waste_id: w.waste_id,
-  dish_or_ingredient: w.dish_or_ingredient,
-  quantity: w.quantity,
-  reason: w.reason,
-  logged_by_cook_id: w.logged_by_cook_id,
-  deduction_flag: w.deduction_flag,
-  ts: w.timestamp,
-});
-
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-const wasteFromRow = (r: any): WasteLog => ({
-  waste_id: r.waste_id,
-  dish_or_ingredient: r.dish_or_ingredient,
-  quantity: r.quantity,
-  reason: r.reason,
-  logged_by_cook_id: r.logged_by_cook_id,
-  deduction_flag: r.deduction_flag,
-  timestamp: r.ts,
-  synced: true,
-});
-
-const ledgerToRow = (l: StaffLedger) => ({
-  ledger_id: l.ledger_id,
-  staff_id: l.staff_id,
-  date: l.date,
-  shortage_amount: l.shortage_amount,
-  spoilage_cost: l.spoilage_cost,
-  reason: l.reason,
-  payroll_deduction_status: l.payroll_deduction_status,
-});
-
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-const ledgerFromRow = (r: any): StaffLedger => ({
-  ledger_id: r.ledger_id,
-  staff_id: r.staff_id,
-  date: r.date,
-  shortage_amount: r.shortage_amount,
-  spoilage_cost: r.spoilage_cost,
-  reason: r.reason,
-  payroll_deduction_status: r.payroll_deduction_status,
-  synced: true,
-});
-
-const ingredientToRow = (i: Ingredient) => ({
-  ingredient_id: i.ingredient_id,
-  name: i.name,
-  unit: i.unit,
-  quantity_on_hand: i.quantity_on_hand,
-  last_purchase_cost: i.last_purchase_cost,
-  low_stock_threshold: i.low_stock_threshold,
-});
-
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-const ingredientFromRow = (r: any): Ingredient => ({
-  ingredient_id: r.ingredient_id,
-  name: r.name,
-  unit: r.unit,
-  quantity_on_hand: r.quantity_on_hand,
-  last_purchase_cost: r.last_purchase_cost,
-  low_stock_threshold: r.low_stock_threshold,
-  synced: true,
-});
-
-const userToRow = (u: User) => ({
-  user_id: u.user_id,
-  name: u.name,
-  role: u.role,
-  pin_code: u.pin_code,
-  active_shift: u.active_shift,
-  basic_salary: u.basic_salary,
-});
-
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-const userFromRow = (r: any): User => ({
-  user_id: r.user_id,
-  name: r.name,
-  role: r.role,
-  pin_code: r.pin_code,
-  active_shift: r.active_shift,
-  basic_salary: r.basic_salary ?? 0,
-  synced: true,
-});
-
-const recipeToRow = (r: RecipeItem) => ({
-  dish_name: r.dish_name,
-  ingredient_id: r.ingredient_id,
-  selling_price: r.selling_price,
-  quantity_per_plate: r.quantity_per_plate,
-});
-
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-const recipeFromRow = (r: any): RecipeItem => ({
-  dish_name: r.dish_name,
-  ingredient_id: r.ingredient_id,
-  selling_price: r.selling_price,
-  quantity_per_plate: r.quantity_per_plate,
-  synced: true,
-});
-
-// ---------------------------------------------------------------------------
-// Push: send local unsynced rows up to Supabase, then mark them synced.
-// ---------------------------------------------------------------------------
-
-async function pushUnsyncedOrders() {
-  const rows = await db.orders.filter((o) => o.synced === false).toArray();
-  if (rows.length === 0) return;
-  const { error } = await supabase.from('orders').upsert(rows.map(orderToRow));
-  if (error) throw error;
-  await db.orders.bulkUpdate(rows.map((r) => ({ key: r.order_id, changes: { synced: true } })));
-}
-
-async function pushUnsyncedWaste() {
-  const rows = await db.wasteLogs.filter((w) => w.synced === false).toArray();
-  if (rows.length === 0) return;
-  const { error } = await supabase.from('waste_logs').upsert(rows.map(wasteToRow));
-  if (error) throw error;
-  await db.wasteLogs.bulkUpdate(rows.map((r) => ({ key: r.waste_id, changes: { synced: true } })));
-}
-
-async function pushUnsyncedLedgers() {
-  const rows = await db.staffLedgers.filter((l) => l.synced === false).toArray();
-  if (rows.length === 0) return;
-  const { error } = await supabase.from('staff_ledgers').upsert(rows.map(ledgerToRow));
-  if (error) throw error;
-  await db.staffLedgers.bulkUpdate(rows.map((r) => ({ key: r.ledger_id, changes: { synced: true } })));
-}
-
-async function pushUnsyncedIngredients() {
-  const rows = await db.ingredients.filter((i) => i.synced === false).toArray();
-  if (rows.length === 0) return;
-  const { error } = await supabase.from('ingredients').upsert(rows.map(ingredientToRow));
-  if (error) throw error;
-  await db.ingredients.bulkUpdate(
-    rows.map((r) => ({ key: r.ingredient_id, changes: { synced: true } }))
-  );
-}
-
-// NEW: Push unsynced users only (instead of all users)
-async function pushUnsyncedUsers() {
-  const rows = await db.users.filter((u) => u.synced === false).toArray();
-  if (rows.length === 0) return;
-  const { error } = await supabase.from('users').upsert(rows.map(userToRow));
-  if (error) throw error;
-  await db.users.bulkUpdate(rows.map((r) => ({ key: r.user_id, changes: { synced: true } })));
-}
-
-// NEW: Push unsynced recipes only
-// Note: Recipes have a composite key, so we handle them differently.
-// We'll push them and then re-pull to ensure we have the correct state.
-async function pushUnsyncedRecipes() {
-  const rows = await db.recipes.filter((r) => r.synced === false).toArray();
-  if (rows.length === 0) return;
-  const { error } = await supabase.from('recipes').upsert(rows.map(recipeToRow));
-  if (error) throw error;
-  // For composite keys, we can't easily bulkUpdate, so we mark them synced by re-pulling
-  // This is safe because recipes are small (a few dozen rows max)
-  const { data: pulledRecipes } = await supabase.from('recipes').select('*');
-  if (pulledRecipes) {
-    await db.recipes.bulkPut(pulledRecipes.map(recipeFromRow));
-  }
-}
-
-/** Push every table's pending local changes up to Supabase. */
-export async function pushAll() {
-  if (!isSupabaseConfigured) return;
-  await Promise.all([
-    pushUnsyncedOrders(),
-    pushUnsyncedWaste(),
-    pushUnsyncedLedgers(),
-    pushUnsyncedIngredients(),
-    pushUnsyncedUsers(),
-    pushUnsyncedRecipes(),
-  ]);
-}
-
-// ---------------------------------------------------------------------------
-// Deletes — Dexie tables don't queue offline deletes, so these push straight
-// to Supabase. Call them right after the matching local db.<table>.delete().
-// If the device is offline when a delete happens, other devices won't see it
-// until this is called again while online (no retry queue yet).
-// ---------------------------------------------------------------------------
-
-export async function deleteUserRemote(userId: string) {
-  if (!isSupabaseConfigured || !navigator.onLine) return;
-  const { error } = await supabase.from('users').delete().eq('user_id', userId);
-  if (error) console.error('[Garomax] delete user remote error', error);
-}
-
-export async function deleteIngredientRemote(ingredientId: string) {
-  if (!isSupabaseConfigured || !navigator.onLine) return;
-  const { error } = await supabase.from('ingredients').delete().eq('ingredient_id', ingredientId);
-  if (error) console.error('[Garomax] delete ingredient remote error', error);
-}
-
-export async function deleteRecipeDishRemote(dishName: string) {
-  if (!isSupabaseConfigured || !navigator.onLine) return;
-  const { error } = await supabase.from('recipes').delete().eq('dish_name', dishName);
-  if (error) console.error('[Garomax] delete dish remote error', error);
-}
-
-export async function deleteRecipeLineRemote(dishName: string, ingredientId: string) {
-  if (!isSupabaseConfigured || !navigator.onLine) return;
-  const { error } = await supabase
-    .from('recipes')
-    .delete()
-    .eq('dish_name', dishName)
-    .eq('ingredient_id', ingredientId);
-  if (error) console.error('[Garomax] delete recipe line remote error', error);
-}
-
-// ---------------------------------------------------------------------------
-// Pull: bring remote rows down into Dexie (used on startup and via realtime).
-// ---------------------------------------------------------------------------
-
-async function pullAll() {
-  const [users, ingredients, recipes, orders, waste, ledgers] = await Promise.all([
-    supabase.from('users').select('*'),
-    supabase.from('ingredients').select('*'),
-    supabase.from('recipes').select('*'),
-    supabase.from('orders').select('*'),
-    supabase.from('waste_logs').select('*'),
-    supabase.from('staff_ledgers').select('*'),
-  ]);
-
-  if (users.data?.length) await db.users.bulkPut(users.data.map(userFromRow));
-  if (ingredients.data?.length) await db.ingredients.bulkPut(ingredients.data.map(ingredientFromRow));
-  if (recipes.data?.length) await db.recipes.bulkPut(recipes.data.map(recipeFromRow));
-  if (orders.data?.length) await db.orders.bulkPut(orders.data.map(orderFromRow));
-  if (waste.data?.length) await db.wasteLogs.bulkPut(waste.data.map(wasteFromRow));
-  if (ledgers.data?.length) await db.staffLedgers.bulkPut(ledgers.data.map(ledgerFromRow));
-}
-
-// ---------------------------------------------------------------------------
-// Realtime: keep every open device's Dexie in step with Supabase as changes
-// land from any other device (waiter tablet, kitchen screen, admin phone).
-// ---------------------------------------------------------------------------
-
-function subscribeRealtime() {
-  const channel = supabase.channel('garomax-sync');
-
-  channel
-    .on('postgres_changes', { event: '*', schema: 'public', table: 'orders' }, (payload) => {
-      if (payload.eventType === 'DELETE') {
-        if (payload.old?.order_id) db.orders.delete(payload.old.order_id);
-        return;
-      }
-      db.orders.put(orderFromRow(payload.new));
-    })
-    .on('postgres_changes', { event: '*', schema: 'public', table: 'ingredients' }, (payload) => {
-      if (payload.eventType === 'DELETE') {
-        if (payload.old?.ingredient_id) db.ingredients.delete(payload.old.ingredient_id);
-        return;
-      }
-      db.ingredients.put(ingredientFromRow(payload.new));
-    })
-    .on('postgres_changes', { event: '*', schema: 'public', table: 'waste_logs' }, (payload) => {
-      if (payload.eventType === 'DELETE') {
-        if (payload.old?.waste_id) db.wasteLogs.delete(payload.old.waste_id);
-        return;
-      }
-      db.wasteLogs.put(wasteFromRow(payload.new));
-    })
-    .on('postgres_changes', { event: '*', schema: 'public', table: 'staff_ledgers' }, (payload) => {
-      if (payload.eventType === 'DELETE') {
-        if (payload.old?.ledger_id) db.staffLedgers.delete(payload.old.ledger_id);
-        return;
-      }
-      db.staffLedgers.put(ledgerFromRow(payload.new));
-    })
-    .on('postgres_changes', { event: '*', schema: 'public', table: 'users' }, (payload) => {
-      if (payload.eventType === 'DELETE') {
-        if (payload.old?.user_id) db.users.delete(payload.old.user_id);
-        return;
-      }
-      db.users.put(userFromRow(payload.new));
-    })
-    .on('postgres_changes', { event: '*', schema: 'public', table: 'recipes' }, (payload) => {
-      if (payload.eventType === 'DELETE') {
-        if (payload.old?.dish_name && payload.old?.ingredient_id) {
-          db.recipes.delete([payload.old.dish_name, payload.old.ingredient_id]);
-        }
-        return;
-      }
-      db.recipes.put(recipeFromRow(payload.new));
-    })
-    .subscribe();
-
-  return channel;
-}
-
-// ---------------------------------------------------------------------------
-// Public entry point
-// ---------------------------------------------------------------------------
-
-let started = false;
-let pushTimer: ReturnType<typeof setInterval> | null = null;
-
-/** Call once on app startup. No-ops safely if Supabase env vars aren't set. */
-export async function startSync() {
-  if (started) return;
-  started = true;
-
-  if (!isSupabaseConfigured) {
-    setStatus('offline');
-    return;
-  }
-
-  const runSync = async () => {
-    if (!navigator.onLine) {
-      setStatus('offline');
-      return;
-    }
-    try {
-      setStatus('syncing');
-      await pushAll();
-      lastSync = new Date();
-      setStatus('synced');
-    } catch (err) {
-      console.error('[Garomax] sync error', err);
-      setStatus('error');
-    }
-  };
-
-  try {
-    setStatus('syncing');
-    // Initial sync: push everything then pull everything
-    await pushAll();
-    await pullAll();
-    lastSync = new Date();
-    setStatus('synced');
-  } catch (err) {
-    console.error('[Garomax] initial sync error', err);
-    setStatus('error');
-  }
-
-  subscribeRealtime();
-
-  // Safety-net push loop, in case a page write happens without calling
-  // requestSync() directly (e.g. future code paths).
-  pushTimer = setInterval(runSync, 5000);
-  window.addEventListener('online', runSync);
-  window.addEventListener('offline', () => setStatus('offline'));
-}
-
-/** Call after any local write for a near-instant push instead of waiting on the interval. */
-export function requestSync() {
-  if (!isSupabaseConfigured || !navigator.onLine) return;
-  pushAll()
-    .then(() => {
-      lastSync = new Date();
-      setStatus('synced');
-    })
-    .catch((err) => {
-      console.error('[Garomax] push error', err);
-      setStatus('error');
-    });
-}
-
-export function stopSync() {
-  if (pushTimer) clearInterval(pushTimer);
-  started = false;
-}
 </file>
 
 <file path="src/pages/KitchenDisplay.tsx">
@@ -5661,10 +5849,999 @@ export const KitchenDisplay: React.FC = () => {
 };
 </file>
 
+<file path="src/App.tsx">
+import React from 'react';
+import { AuthProvider, useAuth } from './context/AuthContext';
+import { Login } from './pages/Login';
+import { WaiterPOS } from './pages/WaiterPOS';
+import { KitchenDisplay } from './pages/KitchenDisplay';
+import { AdminDashboard } from './pages/AdminDashboard';
+import { SuperAdminDashboard } from './pages/SuperAdminDashboard';
+import { LogOut, Cloud, CloudOff, RefreshCw, AlertTriangle } from 'lucide-react';
+import { useSyncStatus } from './hooks/useSyncStatus';
+
+const SyncBadge: React.FC = () => {
+  const { status, configured } = useSyncStatus();
+
+  if (!configured) {
+    return (
+      <div
+        title="Supabase not configured — running local-only, this device won't see other terminals"
+        className="flex items-center gap-1 text-zinc-500 bg-zinc-900/80 px-2 py-1.5 rounded-lg border border-zinc-800/80"
+      >
+        <CloudOff className="w-3.5 h-3.5" />
+      </div>
+    );
+  }
+
+  const config = {
+    offline: { icon: CloudOff, color: 'text-zinc-500', label: 'Offline — changes saved locally' },
+    syncing: { icon: RefreshCw, color: 'text-orange-400 animate-spin', label: 'Syncing…' },
+    synced: { icon: Cloud, color: 'text-emerald-400', label: 'Synced' },
+    error: { icon: AlertTriangle, color: 'text-red-400', label: 'Sync error — retrying' },
+  }[status];
+
+  const Icon = config.icon;
+
+  return (
+    <div
+      title={config.label}
+      className="flex items-center gap-1 bg-zinc-900/80 px-2 py-1.5 rounded-lg border border-zinc-800/80"
+    >
+      <Icon className={`w-3.5 h-3.5 ${config.color}`} />
+    </div>
+  );
+};
+
+const DashboardSwitch: React.FC = () => {
+  const { currentUser, logout } = useAuth();
+
+  if (!currentUser) {
+    return <Login />;
+  }
+
+  return (
+    <div className="min-h-screen bg-[#090a0f] text-zinc-100 font-sans selection:bg-orange-500 selection:text-white">
+      {/* PayRoller-Inspired Minimal Dark Header */}
+      <header className="bg-[#0f1117]/90 backdrop-blur-md border-b border-zinc-800/80 px-4 py-3 sticky top-0 z-50">
+        <div className="max-w-md mx-auto flex items-center justify-between">
+          {/* Logo Brand */}
+          <div className="flex items-center space-x-2">
+            <div>
+              <div className="flex items-center gap-1.5">
+                <span className="font-extrabold text-white text-base tracking-wider uppercase font-mono">
+                  GAROMAX
+                </span>
+                <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-mono font-bold bg-orange-500/10 text-orange-400 border border-orange-500/20 uppercase tracking-widest">
+                  {currentUser.role}
+                </span>
+              </div>
+            </div>
+          </div>
+
+          {/* User Profile, Sync Status & Logout */}
+          <div className="flex items-center gap-2">
+            <SyncBadge />
+            <div className="flex items-center text-xs text-zinc-300 font-mono bg-zinc-900/80 px-2.5 py-1.5 rounded-xl border border-zinc-800/80">
+              <span className="w-1.5 h-1.5 rounded-full bg-orange-500 mr-2 animate-pulse" />
+              <span className="truncate max-w-[100px] font-medium">{currentUser.name}</span>
+            </div>
+            <button
+              onClick={logout}
+              className="p-1.5 rounded-xl bg-zinc-900 hover:bg-zinc-800 text-zinc-400 hover:text-white transition active:scale-95 border border-zinc-800"
+              title="Log Out"
+            >
+              <LogOut className="w-4 h-4" />
+            </button>
+          </div>
+        </div>
+      </header>
+
+      {/* Main Content Area */}
+      <main className="p-4 max-w-md mx-auto">
+        {currentUser.role === 'waiter' && <WaiterPOS />}
+
+        {currentUser.role === 'cook' && <KitchenDisplay/>}
+
+        {currentUser.role === 'admin' && <AdminDashboard />}
+
+        {currentUser.role === 'superadmin' && <SuperAdminDashboard />}
+      </main>
+    </div>
+  );
+};
+
+export default function App() {
+  return (
+    <AuthProvider>
+      <DashboardSwitch />
+    </AuthProvider>
+  );
+}
+</file>
+
+<file path="supabase/schema.sql">
+-- Garomax Bites — Supabase schema (multi-branch)
+-- Run this in the Supabase SQL editor (Project → SQL Editor → New query)
+
+-- ---------------------------------------------------------------------------
+-- Branches
+-- ---------------------------------------------------------------------------
+create table if not exists branches (
+  branch_id text primary key,
+  name text not null,
+  location text
+);
+
+-- ---------------------------------------------------------------------------
+-- Users — staff are fixed to one branch. superadmin is the exception: no
+-- branch_id, sees/manages across every branch.
+-- ---------------------------------------------------------------------------
+create table if not exists users (
+  user_id text primary key,
+  name text not null,
+  role text not null check (role in ('superadmin', 'admin', 'cook', 'waiter')),
+  pin_code text not null,
+  active_shift boolean not null default true,
+  basic_salary numeric not null default 0,
+  branch_id text references branches(branch_id),
+  constraint users_branch_required check (
+    (role = 'superadmin' and branch_id is null)
+    or (role != 'superadmin' and branch_id is not null)
+  )
+);
+
+-- ---------------------------------------------------------------------------
+-- Ingredients — shared identity only (name, unit). A recipe references one
+-- ingredient_id regardless of which branch is cooking it. Stock levels live
+-- separately, per branch, in ingredient_stock below.
+-- ---------------------------------------------------------------------------
+create table if not exists ingredients (
+  ingredient_id text primary key,
+  name text not null,
+  unit text not null check (unit in ('g', 'kg', 'ml', 'l', 'pcs'))
+);
+
+create table if not exists ingredient_stock (
+  branch_id text not null references branches(branch_id),
+  ingredient_id text not null references ingredients(ingredient_id) on delete cascade,
+  quantity_on_hand numeric not null default 0,
+  last_purchase_cost numeric not null default 0,
+  low_stock_threshold numeric not null default 0,
+  primary key (branch_id, ingredient_id)
+);
+
+-- ---------------------------------------------------------------------------
+-- Recipes — the menu. Shared across branches by design (both restaurants
+-- sell the same dishes at the same price), so no branch_id here.
+-- ---------------------------------------------------------------------------
+create table if not exists recipes (
+  dish_name text not null,
+  ingredient_id text not null references ingredients(ingredient_id) on delete cascade,
+  selling_price numeric not null,
+  quantity_per_plate numeric not null,
+  primary key (dish_name, ingredient_id)
+);
+
+-- ---------------------------------------------------------------------------
+-- Transactional tables — each row happened at a specific branch.
+-- ---------------------------------------------------------------------------
+create table if not exists orders (
+  order_id text primary key,
+  branch_id text not null references branches(branch_id),
+  payment_status text not null check (payment_status in ('active', 'paid', 'credit', 'unpaid_loss')),
+  payment_method text check (payment_method in ('cash', 'mpesa', 'credit')),
+  mpesa_code text,
+  kitchen_status text not null default 'queued' check (kitchen_status in ('queued', 'ready')),
+  items jsonb not null,
+  total_amount numeric not null,
+  placed_by_waiter_id text not null references users(user_id),
+  confirmed_by_cook_id text references users(user_id),
+  ts timestamptz not null
+);
+
+create table if not exists waste_logs (
+  waste_id text primary key,
+  branch_id text not null references branches(branch_id),
+  dish_or_ingredient text not null,
+  quantity numeric not null,
+  reason text not null check (reason in ('burnt_overcooked', 'spilled_dropped', 'spoiled_raw')),
+  logged_by_cook_id text not null references users(user_id),
+  deduction_flag boolean not null default false,
+  ts timestamptz not null
+);
+
+create table if not exists staff_ledgers (
+  ledger_id text primary key,
+  branch_id text not null references branches(branch_id),
+  staff_id text not null references users(user_id),
+  date timestamptz not null,
+  shortage_amount numeric not null default 0,
+  spoilage_cost numeric not null default 0,
+  reason text not null,
+  payroll_deduction_status text not null check (payroll_deduction_status in ('pending', 'deducted', 'waived'))
+);
+
+-- ---------------------------------------------------------------------------
+-- Monthly profit rollup — one row per branch per month. Cheaper to query
+-- from a view than to recompute in the app every time the Overview tab loads.
+-- COGS is estimated from recipe ingredient quantities × current stock cost,
+-- which is an approximation (it uses today's cost, not the cost at the time
+-- each order was placed) — good enough for a monthly P&L glance, flag if the
+-- owner wants historical-cost accuracy instead, that needs cost captured on
+-- the order itself.
+-- ---------------------------------------------------------------------------
+create or replace view monthly_branch_stats as
+select
+  o.branch_id,
+  date_trunc('month', o.ts) as month,
+  sum(o.total_amount) filter (where o.payment_status = 'paid') as revenue,
+  coalesce((
+    select sum(oi.quantity * r.quantity_per_plate * s.last_purchase_cost)
+    from orders o2
+    cross join lateral jsonb_to_recordset(o2.items) as oi(dish_name text, quantity numeric)
+    join recipes r on r.dish_name = oi.dish_name
+    join ingredient_stock s on s.ingredient_id = r.ingredient_id and s.branch_id = o2.branch_id
+    where o2.branch_id = o.branch_id
+      and date_trunc('month', o2.ts) = date_trunc('month', o.ts)
+      and o2.payment_status = 'paid'
+  ), 0) as cogs,
+  coalesce((
+    select sum(w.quantity)
+    from waste_logs w
+    where w.branch_id = o.branch_id and date_trunc('month', w.ts) = date_trunc('month', o.ts)
+  ), 0) as waste_units,
+  coalesce((
+    select sum(u.basic_salary)
+    from users u
+    where u.branch_id = o.branch_id and u.active_shift = true
+  ), 0) as monthly_payroll,
+  coalesce((
+    select sum(l.shortage_amount + l.spoilage_cost)
+    from staff_ledgers l
+    where l.branch_id = o.branch_id and date_trunc('month', l.date) = date_trunc('month', o.ts)
+  ), 0) as shortages_and_spoilage_cost
+from orders o
+group by o.branch_id, date_trunc('month', o.ts);
+
+-- ---------------------------------------------------------------------------
+-- Realtime
+-- ---------------------------------------------------------------------------
+alter publication supabase_realtime add table
+  branches, users, ingredients, ingredient_stock, recipes, orders, waste_logs, staff_ledgers;
+
+-- ---------------------------------------------------------------------------
+-- RLS — still permissive "allow all" for now, same reasoning as the single-
+-- branch schema: staff auth is PIN-based, one shared anon key, one trusted
+-- business. This is the piece that MUST change before this becomes a
+-- multi-tenant product (see the notes from our last discussion) — at that
+-- point these need to scope by a real per-session branch_id/business_id
+-- claim instead of `using (true)`.
+-- ---------------------------------------------------------------------------
+alter table branches enable row level security;
+alter table users enable row level security;
+alter table ingredients enable row level security;
+alter table ingredient_stock enable row level security;
+alter table recipes enable row level security;
+alter table orders enable row level security;
+alter table waste_logs enable row level security;
+alter table staff_ledgers enable row level security;
+
+create policy "allow all - branches" on branches for all using (true) with check (true);
+create policy "allow all - users" on users for all using (true) with check (true);
+create policy "allow all - ingredients" on ingredients for all using (true) with check (true);
+create policy "allow all - ingredient_stock" on ingredient_stock for all using (true) with check (true);
+create policy "allow all - recipes" on recipes for all using (true) with check (true);
+create policy "allow all - orders" on orders for all using (true) with check (true);
+create policy "allow all - waste_logs" on waste_logs for all using (true) with check (true);
+create policy "allow all - staff_ledgers" on staff_ledgers for all using (true) with check (true);
+</file>
+
+<file path="index.html">
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="./public/favicon.svg" />
+    <link rel="apple-touch-icon" href="/pwa-192x192.png" />
+    <meta name="theme-color" content="#0f1117" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <title>Garomax Bites</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
+</file>
+
+<file path="vite.config.ts">
+import { defineConfig } from 'vite';
+import react from '@vitejs/plugin-react';
+import tailwindcss from '@tailwindcss/vite';
+import { VitePWA } from 'vite-plugin-pwa';
+
+// https://vite.dev/config/
+export default defineConfig({
+  plugins: [
+    react(),
+    tailwindcss(),
+    VitePWA({
+      registerType: 'autoUpdate',
+      includeAssets: ['favicon.svg'],
+      manifest: {
+        name: 'Garomax Bites',
+        short_name: 'Garomax',
+        description: 'Restaurant stock and sales management — works offline.',
+        theme_color: '#090a0f',
+        background_color: '#090a0f',
+        display: 'standalone',
+        start_url: '/',
+        icons: [
+          { src: '/icons/icon-192.png', sizes: '192x192', type: 'image/png', purpose: 'any' },
+          { src: '/icons/icon-512.png', sizes: '512x512', type: 'image/png', purpose: 'any' },
+          { src: '/icons/icon-maskable-192.png', sizes: '192x192', type: 'image/png', purpose: 'maskable' },
+          { src: '/icons/icon-maskable-512.png', sizes: '512x512', type: 'image/png', purpose: 'maskable' },
+        ],
+      },
+      workbox: {
+        // Precache the built app shell (JS/CSS/HTML/icons) so the app itself
+        // opens with zero connectivity. Order data (Dexie/IndexedDB) is
+        // already local-first and handled separately from this cache.
+        globPatterns: ['**/*.{js,css,html,svg,png,ico}'],
+        // Supabase calls should never be served from a stale cache — always
+        // hit the network (or fail fast) so sync state never lies to the user.
+        runtimeCaching: [
+          {
+            urlPattern: ({ url }) => url.hostname.endsWith('.supabase.co'),
+            handler: 'NetworkOnly',
+          },
+        ],
+      },
+    }),
+  ],
+  server:{
+    host:true,
+    port:5173,
+    strictPort: true,
+    allowedHosts: true,
+  }
+});
+</file>
+
+<file path="src/db/seedLocalData.ts">
+import { db } from './kibandaDB';
+import { isSupabaseConfigured } from '../lib/supabase';
+
+/**
+ * Seeds demo data into a brand-new local database — but ONLY when this
+ * device has no backend configured (VITE_SUPABASE_URL / VITE_SUPABASE_ANON_KEY
+ * unset), i.e. pure local-only/demo mode.
+ *
+ * This used to run on every device unconditionally, keyed off `db.users.count()
+ * === 0`. That's exactly the condition a device hits after a fresh install, a
+ * cleared browser/PWA cache, or (commonly on iOS Safari/PWAs) IndexedDB being
+ * cleared automatically after a period of inactivity. When that happened on a
+ * device that WAS connected to Supabase, it would recreate demo staff with
+ * fixed IDs and push them straight back up to the shared database — silently
+ * undoing a deletion an admin made on a totally different device, sometimes
+ * hours earlier.
+ *
+ * With a real backend configured, a fresh device should always pull its
+ * starting state from Supabase (see startSync in ./sync). A real deployment
+ * gets its first branch and its superadmin account created through the app
+ * itself — see BranchManager — never invented here.
+ */
+export async function seedInitialData() {
+  if (isSupabaseConfigured) return;
+
+  const userCount = await db.users.count();
+  if (userCount === 0) {
+    // Seed one demo branch
+    await db.branches.bulkAdd([{ branch_id: 'main', name: 'Garomax Bites — Demo Branch', location: 'Nairobi' }]);
+
+    // Seed default staff — one per role, all pinned to the demo branch
+    // except the superadmin, who oversees every branch and belongs to none.
+    await db.users.bulkAdd([
+      { user_id: '0', name: 'Garomax Owner', role: 'superadmin', pin_code: '9999', active_shift: true, basic_salary: 0, branch_id: null },
+      { user_id: '1', name: 'Branch Admin', role: 'admin', pin_code: '0000', active_shift: true, basic_salary: 0, branch_id: 'main' },
+      { user_id: '2', name: 'Chef James', role: 'cook', pin_code: '1111', active_shift: true, basic_salary: 15000, branch_id: 'main' },
+      { user_id: '3', name: 'Waitstaff Mary', role: 'waiter', pin_code: '2222', active_shift: true, basic_salary: 12000, branch_id: 'main' },
+    ]);
+
+    // Seed default ingredients — shared definition ...
+    await db.ingredients.bulkAdd([
+      { ingredient_id: 'i1', name: 'Unga (Maize Flour)', unit: 'kg' },
+      { ingredient_id: 'i2', name: 'Potatoes (Viazi)', unit: 'kg' },
+      { ingredient_id: 'i3', name: 'Cooking Oil', unit: 'l' },
+    ]);
+
+    // ... plus per-branch stock levels for the one demo branch.
+    await db.ingredientStock.bulkAdd([
+      { branch_id: 'main', ingredient_id: 'i1', quantity_on_hand: 25, last_purchase_cost: 150, low_stock_threshold: 5 },
+      { branch_id: 'main', ingredient_id: 'i2', quantity_on_hand: 40, last_purchase_cost: 100, low_stock_threshold: 10 },
+      { branch_id: 'main', ingredient_id: 'i3', quantity_on_hand: 15, last_purchase_cost: 250, low_stock_threshold: 3 },
+    ]);
+
+    // Seed default recipes — shared menu, same at every branch
+    await db.recipes.bulkAdd([
+      { dish_name: 'Ugali', selling_price: 50, ingredient_id: 'i1', quantity_per_plate: 0.2 },
+      { dish_name: 'Chips', selling_price: 120, ingredient_id: 'i2', quantity_per_plate: 0.3 },
+      { dish_name: 'Chips', selling_price: 120, ingredient_id: 'i3', quantity_per_plate: 0.05 },
+    ]);
+
+    console.log('Garomax Bites local IndexedDB seeded (local-only demo mode).');
+  }
+}
+</file>
+
+<file path="src/db/sync.ts">
+import { supabase, isSupabaseConfigured } from '../lib/supabase';
+import { db } from './kibandaDB';
+import type {
+  User,
+  Branch,
+  Ingredient,
+  IngredientStock,
+  RecipeItem,
+  Order,
+  WasteLog,
+  StaffLedger,
+  FixedAsset,
+} from '../types';
+
+export type SyncStatus = 'offline' | 'syncing' | 'synced' | 'error';
+
+type Listener = (status: SyncStatus, lastSync: Date | null) => void;
+
+let currentStatus: SyncStatus = isSupabaseConfigured ? 'offline' : 'offline';
+let lastSync: Date | null = null;
+const listeners = new Set<Listener>();
+
+function setStatus(status: SyncStatus) {
+  currentStatus = status;
+  listeners.forEach((l) => l(currentStatus, lastSync));
+}
+
+export function onSyncStatusChange(cb: Listener): () => void {
+  listeners.add(cb);
+  cb(currentStatus, lastSync);
+  return () => listeners.delete(cb);
+}
+
+// ---------------------------------------------------------------------------
+// Row <-> local type mapping. Orders and WasteLog store their date under
+// `timestamp` locally, but the Postgres column is called `ts` (avoids the
+// reserved-word-flavoured `timestamp` name in SQL).
+//
+// Note on scope: every device pulls every branch's data (see pullAll below).
+// Each screen is responsible for filtering by branch_id itself — this file
+// doesn't do server-side branch filtering. Fine at "two mini restaurants"
+// scale; revisit if branch count or data volume grows a lot.
+// ---------------------------------------------------------------------------
+
+const branchToRow = (b: Branch) => ({
+  branch_id: b.branch_id,
+  name: b.name,
+  location: b.location ?? null,
+});
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const branchFromRow = (r: any): Branch => ({
+  branch_id: r.branch_id,
+  name: r.name,
+  location: r.location ?? undefined,
+});
+
+const orderToRow = (o: Order) => ({
+  order_id: o.order_id,
+  branch_id: o.branch_id,
+  payment_status: o.payment_status,
+  payment_method: o.payment_method ?? null,
+  mpesa_code: o.mpesa_code ?? null,
+  kitchen_status: o.kitchen_status,
+  items: o.items,
+  total_amount: o.total_amount,
+  placed_by_waiter_id: o.placed_by_waiter_id,
+  confirmed_by_cook_id: o.confirmed_by_cook_id ?? null,
+  ts: o.timestamp,
+});
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const orderFromRow = (r: any): Order => ({
+  order_id: r.order_id,
+  branch_id: r.branch_id,
+  payment_status: r.payment_status,
+  payment_method: r.payment_method ?? undefined,
+  mpesa_code: r.mpesa_code ?? undefined,
+  kitchen_status: r.kitchen_status ?? 'queued',
+  items: r.items,
+  total_amount: r.total_amount,
+  placed_by_waiter_id: r.placed_by_waiter_id,
+  confirmed_by_cook_id: r.confirmed_by_cook_id ?? undefined,
+  timestamp: r.ts,
+  synced: true,
+});
+
+const wasteToRow = (w: WasteLog) => ({
+  waste_id: w.waste_id,
+  branch_id: w.branch_id,
+  dish_or_ingredient: w.dish_or_ingredient,
+  quantity: w.quantity,
+  reason: w.reason,
+  logged_by_cook_id: w.logged_by_cook_id,
+  deduction_flag: w.deduction_flag,
+  ts: w.timestamp,
+});
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const wasteFromRow = (r: any): WasteLog => ({
+  waste_id: r.waste_id,
+  branch_id: r.branch_id,
+  dish_or_ingredient: r.dish_or_ingredient,
+  quantity: r.quantity,
+  reason: r.reason,
+  logged_by_cook_id: r.logged_by_cook_id,
+  deduction_flag: r.deduction_flag,
+  timestamp: r.ts,
+  synced: true,
+});
+
+const ledgerToRow = (l: StaffLedger) => ({
+  ledger_id: l.ledger_id,
+  branch_id: l.branch_id,
+  staff_id: l.staff_id,
+  date: l.date,
+  shortage_amount: l.shortage_amount,
+  spoilage_cost: l.spoilage_cost,
+  reason: l.reason,
+  payroll_deduction_status: l.payroll_deduction_status,
+});
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const ledgerFromRow = (r: any): StaffLedger => ({
+  ledger_id: r.ledger_id,
+  branch_id: r.branch_id,
+  staff_id: r.staff_id,
+  date: r.date,
+  shortage_amount: r.shortage_amount,
+  spoilage_cost: r.spoilage_cost,
+  reason: r.reason,
+  payroll_deduction_status: r.payroll_deduction_status,
+  synced: true,
+});
+
+// Ingredients are now shared identity only — name + unit, no branch_id.
+const ingredientToRow = (i: Ingredient) => ({
+  ingredient_id: i.ingredient_id,
+  name: i.name,
+  unit: i.unit,
+});
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const ingredientFromRow = (r: any): Ingredient => ({
+  ingredient_id: r.ingredient_id,
+  name: r.name,
+  unit: r.unit,
+  synced: true,
+});
+
+// Stock levels are per-branch.
+const ingredientStockToRow = (s: IngredientStock) => ({
+  branch_id: s.branch_id,
+  ingredient_id: s.ingredient_id,
+  quantity_on_hand: s.quantity_on_hand,
+  last_purchase_cost: s.last_purchase_cost,
+  low_stock_threshold: s.low_stock_threshold,
+});
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const ingredientStockFromRow = (r: any): IngredientStock => ({
+  branch_id: r.branch_id,
+  ingredient_id: r.ingredient_id,
+  quantity_on_hand: r.quantity_on_hand,
+  last_purchase_cost: r.last_purchase_cost,
+  low_stock_threshold: r.low_stock_threshold,
+  synced: true,
+});
+
+const userToRow = (u: User) => ({
+  user_id: u.user_id,
+  name: u.name,
+  role: u.role,
+  pin_code: u.pin_code,
+  active_shift: u.active_shift,
+  basic_salary: u.basic_salary,
+  branch_id: u.branch_id,
+});
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const userFromRow = (r: any): User => ({
+  user_id: r.user_id,
+  name: r.name,
+  role: r.role,
+  pin_code: r.pin_code,
+  active_shift: r.active_shift,
+  basic_salary: r.basic_salary ?? 0,
+  branch_id: r.branch_id ?? null,
+  synced: true,
+});
+
+const recipeToRow = (r: RecipeItem) => ({
+  dish_name: r.dish_name,
+  ingredient_id: r.ingredient_id,
+  selling_price: r.selling_price,
+  quantity_per_plate: r.quantity_per_plate,
+});
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const recipeFromRow = (r: any): RecipeItem => ({
+  dish_name: r.dish_name,
+  ingredient_id: r.ingredient_id,
+  selling_price: r.selling_price,
+  quantity_per_plate: r.quantity_per_plate,
+  synced: true,
+});
+
+const assetToRow = (a: FixedAsset) => ({
+  asset_id: a.asset_id,
+  branch_id: a.branch_id,
+  name: a.name,
+  category: a.category,
+  quantity: a.quantity,
+  unit_cost: a.unit_cost ?? null,
+  condition: a.condition,
+  notes: a.notes ?? null,
+});
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const assetFromRow = (r: any): FixedAsset => ({
+  asset_id: r.asset_id,
+  branch_id: r.branch_id,
+  name: r.name,
+  category: r.category,
+  quantity: r.quantity,
+  unit_cost: r.unit_cost ?? undefined,
+  condition: r.condition,
+  notes: r.notes ?? undefined,
+  synced: true,
+});
+
+// ---------------------------------------------------------------------------
+// Push: send local unsynced rows up to Supabase, then mark them synced.
+// ---------------------------------------------------------------------------
+
+async function pushUnsyncedBranches() {
+  const rows = await db.branches.filter((b) => (b as Branch & { synced?: boolean }).synced === false).toArray();
+  if (rows.length === 0) return;
+  const { error } = await supabase.from('branches').upsert(rows.map(branchToRow));
+  if (error) throw error;
+  await db.branches.bulkUpdate(rows.map((r) => ({ key: r.branch_id, changes: { synced: true } })));
+}
+
+async function pushUnsyncedOrders() {
+  const rows = await db.orders.filter((o) => o.synced === false).toArray();
+  if (rows.length === 0) return;
+  const { error } = await supabase.from('orders').upsert(rows.map(orderToRow));
+  if (error) throw error;
+  await db.orders.bulkUpdate(rows.map((r) => ({ key: r.order_id, changes: { synced: true } })));
+}
+
+async function pushUnsyncedWaste() {
+  const rows = await db.wasteLogs.filter((w) => w.synced === false).toArray();
+  if (rows.length === 0) return;
+  const { error } = await supabase.from('waste_logs').upsert(rows.map(wasteToRow));
+  if (error) throw error;
+  await db.wasteLogs.bulkUpdate(rows.map((r) => ({ key: r.waste_id, changes: { synced: true } })));
+}
+
+async function pushUnsyncedLedgers() {
+  const rows = await db.staffLedgers.filter((l) => l.synced === false).toArray();
+  if (rows.length === 0) return;
+  const { error } = await supabase.from('staff_ledgers').upsert(rows.map(ledgerToRow));
+  if (error) throw error;
+  await db.staffLedgers.bulkUpdate(rows.map((r) => ({ key: r.ledger_id, changes: { synced: true } })));
+}
+
+async function pushUnsyncedIngredients() {
+  const rows = await db.ingredients.filter((i) => i.synced === false).toArray();
+  if (rows.length === 0) return;
+  const { error } = await supabase.from('ingredients').upsert(rows.map(ingredientToRow));
+  if (error) throw error;
+  await db.ingredients.bulkUpdate(
+    rows.map((r) => ({ key: r.ingredient_id, changes: { synced: true } }))
+  );
+}
+
+async function pushUnsyncedIngredientStock() {
+  const rows = await db.ingredientStock.filter((s) => s.synced === false).toArray();
+  if (rows.length === 0) return;
+  const { error } = await supabase.from('ingredient_stock').upsert(rows.map(ingredientStockToRow));
+  if (error) throw error;
+  await db.ingredientStock.bulkUpdate(
+    rows.map((r) => ({ key: [r.branch_id, r.ingredient_id], changes: { synced: true } }))
+  );
+}
+
+async function pushUnsyncedUsers() {
+  const rows = await db.users.filter((u) => u.synced === false).toArray();
+  if (rows.length === 0) return;
+  const { error } = await supabase.from('users').upsert(rows.map(userToRow));
+  if (error) throw error;
+  await db.users.bulkUpdate(rows.map((r) => ({ key: r.user_id, changes: { synced: true } })));
+}
+
+async function pushUnsyncedRecipes() {
+  const rows = await db.recipes.filter((r) => r.synced === false).toArray();
+  if (rows.length === 0) return;
+  const { error } = await supabase.from('recipes').upsert(rows.map(recipeToRow));
+  if (error) throw error;
+  await db.recipes.bulkUpdate(
+    rows.map((r) => ({ key: [r.dish_name, r.ingredient_id], changes: { synced: true } }))
+  );
+}
+
+async function pushUnsyncedAssets() {
+  const rows = await db.fixedAssets.filter((a) => a.synced === false).toArray();
+  if (rows.length === 0) return;
+  const { error } = await supabase.from('fixed_assets').upsert(rows.map(assetToRow));
+  if (error) throw error;
+  await db.fixedAssets.bulkUpdate(rows.map((r) => ({ key: r.asset_id, changes: { synced: true } })));
+}
+
+/** Push every table's pending local changes up to Supabase. */
+export async function pushAll() {
+  if (!isSupabaseConfigured) return;
+  await Promise.all([
+    pushUnsyncedBranches(),
+    pushUnsyncedOrders(),
+    pushUnsyncedWaste(),
+    pushUnsyncedLedgers(),
+    pushUnsyncedIngredients(),
+    pushUnsyncedIngredientStock(),
+    pushUnsyncedUsers(),
+    pushUnsyncedRecipes(),
+    pushUnsyncedAssets(),
+  ]);
+}
+
+// ---------------------------------------------------------------------------
+// Deletes — Dexie tables don't queue offline deletes, so these push straight
+// to Supabase. Call them right after the matching local db.<table>.delete().
+// If the device is offline when a delete happens, other devices won't see it
+// until this is called again while online (no retry queue yet).
+// ---------------------------------------------------------------------------
+
+export async function deleteUserRemote(userId: string) {
+  if (!isSupabaseConfigured || !navigator.onLine) return;
+  const { error } = await supabase.from('users').delete().eq('user_id', userId);
+  if (error) console.error('[Garomax] delete user remote error', error);
+}
+
+export async function deleteIngredientRemote(ingredientId: string) {
+  if (!isSupabaseConfigured || !navigator.onLine) return;
+  // ingredient_stock rows cascade-delete in Postgres (on delete cascade), so
+  // only the definition row needs an explicit delete here.
+  const { error } = await supabase.from('ingredients').delete().eq('ingredient_id', ingredientId);
+  if (error) console.error('[Garomax] delete ingredient remote error', error);
+}
+
+export async function deleteRecipeDishRemote(dishName: string) {
+  if (!isSupabaseConfigured || !navigator.onLine) return;
+  const { error } = await supabase.from('recipes').delete().eq('dish_name', dishName);
+  if (error) console.error('[Garomax] delete dish remote error', error);
+}
+
+export async function deleteRecipeLineRemote(dishName: string, ingredientId: string) {
+  if (!isSupabaseConfigured || !navigator.onLine) return;
+  const { error } = await supabase
+    .from('recipes')
+    .delete()
+    .eq('dish_name', dishName)
+    .eq('ingredient_id', ingredientId);
+  if (error) console.error('[Garomax] delete recipe line remote error', error);
+}
+
+export async function deleteAssetRemote(assetId: string) {
+  if (!isSupabaseConfigured || !navigator.onLine) return;
+  const { error } = await supabase.from('fixed_assets').delete().eq('asset_id', assetId);
+  if (error) console.error('[Garomax] delete asset remote error', error);
+}
+
+// ---------------------------------------------------------------------------
+// Pull: bring remote rows down into Dexie (used on startup and via realtime).
+// Every device pulls every branch — see the note at the top of this file.
+// ---------------------------------------------------------------------------
+
+async function pullAll() {
+  const [branches, users, ingredients, ingredientStock, recipes, orders, waste, ledgers, assets] = await Promise.all([
+    supabase.from('branches').select('*'),
+    supabase.from('users').select('*'),
+    supabase.from('ingredients').select('*'),
+    supabase.from('ingredient_stock').select('*'),
+    supabase.from('recipes').select('*'),
+    supabase.from('orders').select('*'),
+    supabase.from('waste_logs').select('*'),
+    supabase.from('staff_ledgers').select('*'),
+    supabase.from('fixed_assets').select('*'),
+  ]);
+
+  if (branches.data?.length) await db.branches.bulkPut(branches.data.map(branchFromRow));
+  if (users.data?.length) await db.users.bulkPut(users.data.map(userFromRow));
+  if (ingredients.data?.length) await db.ingredients.bulkPut(ingredients.data.map(ingredientFromRow));
+  if (ingredientStock.data?.length) await db.ingredientStock.bulkPut(ingredientStock.data.map(ingredientStockFromRow));
+  if (recipes.data?.length) await db.recipes.bulkPut(recipes.data.map(recipeFromRow));
+  if (orders.data?.length) await db.orders.bulkPut(orders.data.map(orderFromRow));
+  if (waste.data?.length) await db.wasteLogs.bulkPut(waste.data.map(wasteFromRow));
+  if (ledgers.data?.length) await db.staffLedgers.bulkPut(ledgers.data.map(ledgerFromRow));
+  if (assets.data?.length) await db.fixedAssets.bulkPut(assets.data.map(assetFromRow));
+}
+
+// ---------------------------------------------------------------------------
+// Realtime: keep every open device's Dexie in step with Supabase as changes
+// land from any other device (waiter tablet, kitchen screen, admin phone).
+// ---------------------------------------------------------------------------
+
+function subscribeRealtime() {
+  const channel = supabase.channel('garomax-sync');
+
+  channel
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'branches' }, (payload) => {
+      if (payload.eventType === 'DELETE') {
+        if (payload.old?.branch_id) db.branches.delete(payload.old.branch_id);
+        return;
+      }
+      db.branches.put(branchFromRow(payload.new));
+    })
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'orders' }, (payload) => {
+      if (payload.eventType === 'DELETE') {
+        if (payload.old?.order_id) db.orders.delete(payload.old.order_id);
+        return;
+      }
+      db.orders.put(orderFromRow(payload.new));
+    })
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'ingredients' }, (payload) => {
+      if (payload.eventType === 'DELETE') {
+        if (payload.old?.ingredient_id) db.ingredients.delete(payload.old.ingredient_id);
+        return;
+      }
+      db.ingredients.put(ingredientFromRow(payload.new));
+    })
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'ingredient_stock' }, (payload) => {
+      if (payload.eventType === 'DELETE') {
+        if (payload.old?.branch_id && payload.old?.ingredient_id) {
+          db.ingredientStock.delete([payload.old.branch_id, payload.old.ingredient_id]);
+        }
+        return;
+      }
+      db.ingredientStock.put(ingredientStockFromRow(payload.new));
+    })
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'waste_logs' }, (payload) => {
+      if (payload.eventType === 'DELETE') {
+        if (payload.old?.waste_id) db.wasteLogs.delete(payload.old.waste_id);
+        return;
+      }
+      db.wasteLogs.put(wasteFromRow(payload.new));
+    })
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'staff_ledgers' }, (payload) => {
+      if (payload.eventType === 'DELETE') {
+        if (payload.old?.ledger_id) db.staffLedgers.delete(payload.old.ledger_id);
+        return;
+      }
+      db.staffLedgers.put(ledgerFromRow(payload.new));
+    })
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'users' }, (payload) => {
+      if (payload.eventType === 'DELETE') {
+        if (payload.old?.user_id) db.users.delete(payload.old.user_id);
+        return;
+      }
+      db.users.put(userFromRow(payload.new));
+    })
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'recipes' }, (payload) => {
+      if (payload.eventType === 'DELETE') {
+        if (payload.old?.dish_name && payload.old?.ingredient_id) {
+          db.recipes.delete([payload.old.dish_name, payload.old.ingredient_id]);
+        }
+        return;
+      }
+      db.recipes.put(recipeFromRow(payload.new));
+    })
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'fixed_assets' }, (payload) => {
+      if (payload.eventType === 'DELETE') {
+        if (payload.old?.asset_id) db.fixedAssets.delete(payload.old.asset_id);
+        return;
+      }
+      db.fixedAssets.put(assetFromRow(payload.new));
+    })
+    .subscribe();
+
+  return channel;
+}
+
+// ---------------------------------------------------------------------------
+// Public entry point
+// ---------------------------------------------------------------------------
+
+let started = false;
+let pushTimer: ReturnType<typeof setInterval> | null = null;
+
+/** Call once on app startup. No-ops safely if Supabase env vars aren't set. */
+export async function startSync() {
+  if (started) return;
+  started = true;
+
+  if (!isSupabaseConfigured) {
+    setStatus('offline');
+    return;
+  }
+
+  const runSync = async () => {
+    if (!navigator.onLine) {
+      setStatus('offline');
+      return;
+    }
+    try {
+      setStatus('syncing');
+      await pushAll();
+      lastSync = new Date();
+      setStatus('synced');
+    } catch (err) {
+      console.error('[Garomax] sync error', err);
+      setStatus('error');
+    }
+  };
+
+  try {
+    setStatus('syncing');
+    // Pull first: hydrate this device from Supabase (the source of truth)
+    // before pushing anything local up. Pushing first would let a device
+    // with stale or freshly-seeded local data overwrite what other devices
+    // already deleted or changed.
+    await pullAll();
+    await pushAll();
+    lastSync = new Date();
+    setStatus('synced');
+  } catch (err) {
+    console.error('[Garomax] initial sync error', err);
+    setStatus('error');
+  }
+
+  subscribeRealtime();
+
+  // Safety-net push loop, in case a page write happens without calling
+  // requestSync() directly (e.g. future code paths).
+  pushTimer = setInterval(runSync, 5000);
+  window.addEventListener('online', runSync);
+  window.addEventListener('offline', () => setStatus('offline'));
+}
+
+/** Call after any local write for a near-instant push instead of waiting on the interval. */
+export function requestSync() {
+  if (!isSupabaseConfigured || !navigator.onLine) return;
+  pushAll()
+    .then(() => {
+      lastSync = new Date();
+      setStatus('synced');
+    })
+    .catch((err) => {
+      console.error('[Garomax] push error', err);
+      setStatus('error');
+    });
+}
+
+export function stopSync() {
+  if (pushTimer) clearInterval(pushTimer);
+  started = false;
+}
+</file>
+
 <file path="src/pages/StockMenuManager.tsx">
 import React, { useMemo, useState } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db } from '../db/kibandaDB';
+import { useAuth } from '../context/AuthContext';
 import {
   requestSync,
   deleteIngredientRemote,
@@ -5672,6 +6849,14 @@ import {
   deleteRecipeLineRemote,
 } from '../db/sync';
 import type { Ingredient, RecipeItem } from '../types';
+
+// A branch's view of a shared ingredient: identity fields from `Ingredient`
+// joined with this branch's own quantity/cost/threshold from `IngredientStock`.
+type StockedIngredient = Ingredient & {
+  quantity_on_hand: number;
+  last_purchase_cost: number;
+  low_stock_threshold: number;
+};
 import { Pagination } from '../components/Pagination';
 import { usePagination } from '../components/usePagination';
 import { SearchInput } from '../components/SearchInput';
@@ -5691,10 +6876,35 @@ const money = (n: number) => `KES ${n.toLocaleString(undefined, { maximumFractio
 const UNITS: Ingredient['unit'][] = ['g', 'kg', 'ml', 'l', 'pcs'];
 
 export const StockMenuManager: React.FC = () => {
-  const ingredients = useLiveQuery(() => db.ingredients.toArray(), []);
+  const { currentUser } = useAuth();
+  const myBranchId = currentUser?.branch_id ?? null;
+
+  const ingredientDefs = useLiveQuery(() => db.ingredients.toArray(), []);
+  const allIngredientStock = useLiveQuery(() => db.ingredientStock.toArray(), []);
   const recipes = useLiveQuery(() => db.recipes.toArray(), []);
 
-  const ingredientMap = new Map((ingredients ?? []).map((i) => [i.ingredient_id, i]));
+  // Only ingredients this branch actually stocks — i.e. has a matching
+  // ingredientStock row for. (Sharing an existing ingredient definition
+  // into a second branch isn't wired up in this UI yet; each branch's
+  // "Add Ingredient" creates its own definition + stock row together.)
+  const ingredients: StockedIngredient[] = useMemo(() => {
+    const defMap = new Map((ingredientDefs ?? []).map((i) => [i.ingredient_id, i]));
+    return (allIngredientStock ?? [])
+      .filter((s) => s.branch_id === myBranchId)
+      .map((s) => {
+        const def = defMap.get(s.ingredient_id);
+        if (!def) return null;
+        return {
+          ...def,
+          quantity_on_hand: s.quantity_on_hand,
+          last_purchase_cost: s.last_purchase_cost,
+          low_stock_threshold: s.low_stock_threshold,
+        };
+      })
+      .filter((i): i is StockedIngredient => i !== null);
+  }, [ingredientDefs, allIngredientStock, myBranchId]);
+
+  const ingredientMap = new Map(ingredients.map((i) => [i.ingredient_id, i]));
 
   const dishes = useMemo(() => {
     const map = new Map<string, { dish_name: string; selling_price: number; lines: RecipeItem[] }>();
@@ -5735,6 +6945,7 @@ export const StockMenuManager: React.FC = () => {
 
   const handleAddIngredient = async () => {
     setIngError('');
+    if (!myBranchId) return setIngError('Your account has no branch assigned — contact the owner.');
     if (!ingName.trim()) return setIngError('Enter an ingredient name.');
     const qty = parseFloat(ingQty);
     const cost = parseFloat(ingCost);
@@ -5743,10 +6954,16 @@ export const StockMenuManager: React.FC = () => {
     if (isNaN(cost) || cost < 0) return setIngError('Enter a valid purchase cost.');
     if (isNaN(threshold) || threshold < 0) return setIngError('Enter a valid low-stock threshold.');
 
+    const ingredient_id = crypto.randomUUID();
     await db.ingredients.add({
-      ingredient_id: crypto.randomUUID(),
+      ingredient_id,
       name: ingName.trim(),
       unit: ingUnit,
+      synced: false,
+    });
+    await db.ingredientStock.add({
+      branch_id: myBranchId,
+      ingredient_id,
       quantity_on_hand: qty,
       last_purchase_cost: cost,
       low_stock_threshold: threshold,
@@ -5760,17 +6977,17 @@ export const StockMenuManager: React.FC = () => {
   // -------------------------------------------------------------------
   // Restock existing ingredient
   // -------------------------------------------------------------------
-  const [restockTarget, setRestockTarget] = useState<Ingredient | null>(null);
+  const [restockTarget, setRestockTarget] = useState<StockedIngredient | null>(null);
   const [restockQty, setRestockQty] = useState('');
   const [restockCost, setRestockCost] = useState('');
 
   const handleRestock = async () => {
-    if (!restockTarget) return;
+    if (!restockTarget || !myBranchId) return;
     const addQty = parseFloat(restockQty);
     if (isNaN(addQty) || addQty <= 0) return;
     const newCost = restockCost.trim() ? parseFloat(restockCost) : restockTarget.last_purchase_cost;
 
-    await db.ingredients.update(restockTarget.ingredient_id, {
+    await db.ingredientStock.update([myBranchId, restockTarget.ingredient_id], {
       quantity_on_hand: restockTarget.quantity_on_hand + addQty,
       last_purchase_cost: newCost,
       synced: false,
@@ -5788,6 +7005,7 @@ export const StockMenuManager: React.FC = () => {
 
   const handleDeleteIngredient = async (id: string) => {
     await db.ingredients.delete(id);
+    if (myBranchId) await db.ingredientStock.delete([myBranchId, id]);
     deleteIngredientRemote(id);
     setConfirmDeleteIngredient(null);
   };
@@ -5839,6 +7057,7 @@ export const StockMenuManager: React.FC = () => {
         selling_price: price,
         ingredient_id: l.ingredient_id,
         quantity_per_plate: parseFloat(l.quantity_per_plate),
+        synced: false,
       }))
     );
     requestSync();
@@ -5858,7 +7077,7 @@ export const StockMenuManager: React.FC = () => {
       setEditingPriceDish(null);
       return;
     }
-    await db.recipes.where('dish_name').equals(dish_name).modify({ selling_price: price });
+    await db.recipes.where('dish_name').equals(dish_name).modify({ selling_price: price, synced: false });
     requestSync();
     setEditingPriceDish(null);
     setEditingPriceValue('');
@@ -5896,6 +7115,7 @@ export const StockMenuManager: React.FC = () => {
       ingredient_id: newLineIngredient,
       selling_price,
       quantity_per_plate: qty,
+      synced: false,
     });
     requestSync();
     setAddingLineTo(null);
@@ -6503,245 +7723,6 @@ export const StockMenuManager: React.FC = () => {
 };
 </file>
 
-<file path="src/App.tsx">
-import React from 'react';
-import { AuthProvider, useAuth } from './context/AuthContext';
-import { Login } from './pages/Login';
-import { WaiterPOS } from './pages/WaiterPOS';
-import { KitchenDisplay } from './pages/KitchenDisplay';
-import { AdminDashboard } from './pages/AdminDashboard';
-import { LogOut, Cloud, CloudOff, RefreshCw, AlertTriangle } from 'lucide-react';
-import { useSyncStatus } from './hooks/useSyncStatus';
-
-const SyncBadge: React.FC = () => {
-  const { status, configured } = useSyncStatus();
-
-  if (!configured) {
-    return (
-      <div
-        title="Supabase not configured — running local-only, this device won't see other terminals"
-        className="flex items-center gap-1 text-zinc-500 bg-zinc-900/80 px-2 py-1.5 rounded-lg border border-zinc-800/80"
-      >
-        <CloudOff className="w-3.5 h-3.5" />
-      </div>
-    );
-  }
-
-  const config = {
-    offline: { icon: CloudOff, color: 'text-zinc-500', label: 'Offline — changes saved locally' },
-    syncing: { icon: RefreshCw, color: 'text-orange-400 animate-spin', label: 'Syncing…' },
-    synced: { icon: Cloud, color: 'text-emerald-400', label: 'Synced' },
-    error: { icon: AlertTriangle, color: 'text-red-400', label: 'Sync error — retrying' },
-  }[status];
-
-  const Icon = config.icon;
-
-  return (
-    <div
-      title={config.label}
-      className="flex items-center gap-1 bg-zinc-900/80 px-2 py-1.5 rounded-lg border border-zinc-800/80"
-    >
-      <Icon className={`w-3.5 h-3.5 ${config.color}`} />
-    </div>
-  );
-};
-
-const DashboardSwitch: React.FC = () => {
-  const { currentUser, logout } = useAuth();
-
-  if (!currentUser) {
-    return <Login />;
-  }
-
-  return (
-    <div className="min-h-screen bg-[#090a0f] text-zinc-100 font-sans selection:bg-orange-500 selection:text-white">
-      {/* PayRoller-Inspired Minimal Dark Header */}
-      <header className="bg-[#0f1117]/90 backdrop-blur-md border-b border-zinc-800/80 px-4 py-3 sticky top-0 z-50">
-        <div className="max-w-md mx-auto flex items-center justify-between">
-          {/* Logo Brand */}
-          <div className="flex items-center space-x-2">
-            <div>
-              <div className="flex items-center gap-1.5">
-                <span className="font-extrabold text-white text-base tracking-wider uppercase font-mono">
-                  GAROMAX
-                </span>
-                <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-mono font-bold bg-orange-500/10 text-orange-400 border border-orange-500/20 uppercase tracking-widest">
-                  {currentUser.role}
-                </span>
-              </div>
-            </div>
-          </div>
-
-          {/* User Profile, Sync Status & Logout */}
-          <div className="flex items-center gap-2">
-            <SyncBadge />
-            <div className="flex items-center text-xs text-zinc-300 font-mono bg-zinc-900/80 px-2.5 py-1.5 rounded-xl border border-zinc-800/80">
-              <span className="w-1.5 h-1.5 rounded-full bg-orange-500 mr-2 animate-pulse" />
-              <span className="truncate max-w-[100px] font-medium">{currentUser.name}</span>
-            </div>
-            <button
-              onClick={logout}
-              className="p-1.5 rounded-xl bg-zinc-900 hover:bg-zinc-800 text-zinc-400 hover:text-white transition active:scale-95 border border-zinc-800"
-              title="Log Out"
-            >
-              <LogOut className="w-4 h-4" />
-            </button>
-          </div>
-        </div>
-      </header>
-
-      {/* Main Content Area */}
-      <main className="p-4 max-w-md mx-auto">
-        {currentUser.role === 'waiter' && <WaiterPOS />}
-
-        {currentUser.role === 'cook' && <KitchenDisplay/>}
-
-        {currentUser.role === 'admin' && <AdminDashboard />}
-      </main>
-    </div>
-  );
-};
-
-export default function App() {
-  return (
-    <AuthProvider>
-      <DashboardSwitch />
-    </AuthProvider>
-  );
-}
-</file>
-
-<file path="vite.config.ts">
-import { defineConfig } from 'vite';
-import react from '@vitejs/plugin-react';
-import tailwindcss from '@tailwindcss/vite';
-import { VitePWA } from 'vite-plugin-pwa';
-
-// https://vite.dev/config/
-export default defineConfig({
-  plugins: [
-    react(),
-    tailwindcss(),
-    VitePWA({
-      registerType: 'autoUpdate',
-      includeAssets: ['favicon.svg'],
-      manifest: {
-        name: 'Garomax Bites',
-        short_name: 'Garomax',
-        description: 'Restaurant stock and sales management — works offline.',
-        theme_color: '#090a0f',
-        background_color: '#090a0f',
-        display: 'standalone',
-        start_url: '/',
-        icons: [
-          { src: '/icons/icon-192.png', sizes: '192x192', type: 'image/png', purpose: 'any' },
-          { src: '/icons/icon-512.png', sizes: '512x512', type: 'image/png', purpose: 'any' },
-          { src: '/icons/icon-maskable-192.png', sizes: '192x192', type: 'image/png', purpose: 'maskable' },
-          { src: '/icons/icon-maskable-512.png', sizes: '512x512', type: 'image/png', purpose: 'maskable' },
-        ],
-      },
-      workbox: {
-        // Precache the built app shell (JS/CSS/HTML/icons) so the app itself
-        // opens with zero connectivity. Order data (Dexie/IndexedDB) is
-        // already local-first and handled separately from this cache.
-        globPatterns: ['**/*.{js,css,html,svg,png,ico}'],
-        // Supabase calls should never be served from a stale cache — always
-        // hit the network (or fail fast) so sync state never lies to the user.
-        runtimeCaching: [
-          {
-            urlPattern: ({ url }) => url.hostname.endsWith('.supabase.co'),
-            handler: 'NetworkOnly',
-          },
-        ],
-      },
-    }),
-  ],
-  server:{
-    host:true,
-    port:5173,
-    strictPort: true,
-    allowedHosts: true,
-  }
-});
-</file>
-
-<file path="src/db/kibandaDB.ts">
-import Dexie, { type Table } from 'dexie';
-import type { User, Ingredient, RecipeItem, Order, WasteLog, StaffLedger } from '../types';
-
-export class KibandaDatabase extends Dexie {
-  users!: Table<User>;
-  ingredients!: Table<Ingredient>;
-  recipes!: Table<RecipeItem>;
-  orders!: Table<Order>;
-  wasteLogs!: Table<WasteLog>;
-  staffLedgers!: Table<StaffLedger>;
-
-  constructor() {
-    super('GaromaxBitesDB');
-    
-    this.version(1).stores({
-      users: 'user_id, pin_code, role',
-      ingredients: 'ingredient_id, name',
-      recipes: '[dish_name+ingredient_id], dish_name, ingredient_id',
-      orders: 'order_id, payment_status, placed_by_waiter_id, timestamp, synced',
-      wasteLogs: 'waste_id, logged_by_cook_id, timestamp, synced',
-      staffLedgers: 'ledger_id, staff_id, date, synced'
-    });
-
-    // v2: kitchen prep status is now tracked separately from payment status,
-    // so "mark prepared" in the kitchen no longer closes the waiter's bill.
-    this.version(2).stores({
-      orders: 'order_id, payment_status, kitchen_status, placed_by_waiter_id, timestamp, synced',
-    }).upgrade(async (tx) => {
-      await tx.table('orders').toCollection().modify((order) => {
-        if (!order.kitchen_status) {
-          // Best-effort backfill: orders already marked paid under the old
-          // logic were also implicitly "prepared", so treat them as ready.
-          order.kitchen_status = order.payment_status === 'active' ? 'queued' : 'ready';
-        }
-      });
-    });
-
-    // v3: staff now have a basic salary so payroll can be computed
-    // automatically instead of an admin doing the maths by hand.
-    this.version(3).stores({
-      users: 'user_id, pin_code, role',
-    }).upgrade(async (tx) => {
-      await tx.table('users').toCollection().modify((user) => {
-        if (user.basic_salary === undefined) {
-          user.basic_salary = 0;
-        }
-        // Initialize synced flag for existing users
-        if (user.synced === undefined) {
-          user.synced = true;
-        }
-      });
-    });
-
-    // v4: Add synced flag for users and recipes to support proper sync
-    this.version(4).stores({
-      users: 'user_id, pin_code, role, synced',
-      ingredients: 'ingredient_id, name, synced',
-      recipes: '[dish_name+ingredient_id], dish_name, ingredient_id, synced',
-      orders: 'order_id, payment_status, kitchen_status, placed_by_waiter_id, timestamp, synced',
-      wasteLogs: 'waste_id, logged_by_cook_id, timestamp, synced',
-      staffLedgers: 'ledger_id, staff_id, date, synced'
-    }).upgrade(async (tx) => {
-      // Initialize synced for existing users and recipes
-      await tx.table('users').toCollection().modify((user) => {
-        if (user.synced === undefined) user.synced = true;
-      });
-      await tx.table('recipes').toCollection().modify((recipe) => {
-        if (recipe.synced === undefined) recipe.synced = true;
-      });
-    });
-  }
-}
-
-export const db = new KibandaDatabase();
-</file>
-
 <file path="src/pages/WaiterPOS.tsx">
 import React, { useState } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
@@ -7264,8 +8245,149 @@ export const WaiterPOS: React.FC = () => {
 };
 </file>
 
+<file path="src/db/kibandaDB.ts">
+import Dexie, { type Table } from 'dexie';
+import type {
+  User,
+  Branch,
+  Ingredient,
+  IngredientStock,
+  RecipeItem,
+  Order,
+  WasteLog,
+  StaffLedger,
+  FixedAsset,
+} from '../types';
+
+export class KibandaDatabase extends Dexie {
+  users!: Table<User>;
+  branches!: Table<Branch>;
+  ingredients!: Table<Ingredient>;
+  ingredientStock!: Table<IngredientStock>;
+  recipes!: Table<RecipeItem>;
+  orders!: Table<Order>;
+  wasteLogs!: Table<WasteLog>;
+  staffLedgers!: Table<StaffLedger>;
+  fixedAssets!: Table<FixedAsset>;
+
+  constructor() {
+    super('GaromaxBitesDB');
+
+    this.version(1).stores({
+      users: 'user_id, pin_code, role',
+      ingredients: 'ingredient_id, name',
+      recipes: '[dish_name+ingredient_id], dish_name, ingredient_id',
+      orders: 'order_id, payment_status, placed_by_waiter_id, timestamp, synced',
+      wasteLogs: 'waste_id, logged_by_cook_id, timestamp, synced',
+      staffLedgers: 'ledger_id, staff_id, date, synced',
+    });
+
+    this.version(2).stores({
+      orders: 'order_id, payment_status, kitchen_status, placed_by_waiter_id, timestamp, synced',
+    }).upgrade(async (tx) => {
+      await tx.table('orders').toCollection().modify((order) => {
+        if (!order.kitchen_status) {
+          order.kitchen_status = order.payment_status === 'active' ? 'queued' : 'ready';
+        }
+      });
+    });
+
+    this.version(3).stores({
+      users: 'user_id, pin_code, role',
+    }).upgrade(async (tx) => {
+      await tx.table('users').toCollection().modify((user) => {
+        if (user.basic_salary === undefined) {
+          user.basic_salary = 0;
+        }
+      });
+    });
+
+    // v4: multi-branch support.
+    //  - New `branches` and `ingredientStock` tables.
+    //  - `ingredients` becomes shared identity only (name, unit); its old
+    //    per-row stock fields move into `ingredientStock`, keyed by branch.
+    //  - `users`, `orders`, `wasteLogs`, `staffLedgers` gain a `branch_id`.
+    //
+    // This app is being re-cloned fresh for the multi-branch build, so this
+    // upgrade path is a courtesy for any device that still has old v3 data
+    // sitting in its browser — it assumes a single existing branch (id
+    // 'main') to migrate into, since there's no way to ask "which branch is
+    // this old data?" from inside an upgrade function. Delete/rename 'main'
+    // once real branches are set up.
+    this.version(4).stores({
+      branches: 'branch_id',
+      users: 'user_id, pin_code, role, branch_id',
+      ingredients: 'ingredient_id, name',
+      ingredientStock: '[branch_id+ingredient_id], branch_id, ingredient_id',
+      recipes: '[dish_name+ingredient_id], dish_name, ingredient_id',
+      orders: 'order_id, payment_status, kitchen_status, placed_by_waiter_id, timestamp, synced, branch_id',
+      wasteLogs: 'waste_id, logged_by_cook_id, timestamp, synced, branch_id',
+      staffLedgers: 'ledger_id, staff_id, date, synced, branch_id',
+    }).upgrade(async (tx) => {
+      const FALLBACK_BRANCH_ID = 'main';
+
+      const hasExistingData = (await tx.table('users').count()) > 0;
+      if (hasExistingData) {
+        await tx.table('branches').put({ branch_id: FALLBACK_BRANCH_ID, name: 'Main Branch' });
+      }
+
+      await tx.table('users').toCollection().modify((user) => {
+        if (user.role !== 'superadmin' && !user.branch_id) {
+          user.branch_id = FALLBACK_BRANCH_ID;
+        }
+      });
+
+      // Old `ingredients` rows carried stock fields directly — split those
+      // off into ingredientStock, then strip them from the ingredient row.
+      const oldIngredients = await tx.table('ingredients').toArray();
+      for (const ing of oldIngredients) {
+        if ('quantity_on_hand' in ing) {
+          await tx.table('ingredientStock').put({
+            branch_id: FALLBACK_BRANCH_ID,
+            ingredient_id: ing.ingredient_id,
+            quantity_on_hand: ing.quantity_on_hand ?? 0,
+            last_purchase_cost: ing.last_purchase_cost ?? 0,
+            low_stock_threshold: ing.low_stock_threshold ?? 0,
+          });
+        }
+      }
+      await tx.table('ingredients').toCollection().modify((ing) => {
+        delete ing.quantity_on_hand;
+        delete ing.last_purchase_cost;
+        delete ing.low_stock_threshold;
+      });
+
+      await tx.table('orders').toCollection().modify((o) => {
+        if (!o.branch_id) o.branch_id = FALLBACK_BRANCH_ID;
+      });
+      await tx.table('wasteLogs').toCollection().modify((w) => {
+        if (!w.branch_id) w.branch_id = FALLBACK_BRANCH_ID;
+      });
+      await tx.table('staffLedgers').toCollection().modify((l) => {
+        if (!l.branch_id) l.branch_id = FALLBACK_BRANCH_ID;
+      });
+    });
+
+    // v5: fixed-asset inventory — tables, chairs, sufurias, cups, spoons.
+    // A new table, so no data migration needed, just the schema.
+    this.version(5).stores({
+      fixedAssets: 'asset_id, branch_id, category, synced',
+    });
+  }
+}
+
+export const db = new KibandaDatabase();
+</file>
+
 <file path="src/types/index.ts">
-export type UserRole = 'admin' | 'cook' | 'waiter';
+export type UserRole = 'superadmin' | 'admin' | 'cook' | 'waiter';
+
+export interface Branch {
+  branch_id: string;
+  name: string;
+  location?: string;
+  synced?: boolean;
+}
 
 export interface User {
   user_id: string;
@@ -7274,25 +8396,54 @@ export interface User {
   pin_code: string;
   active_shift: boolean;
   basic_salary: number;
-  synced?: boolean;  // <-- ADD THIS
+  // null only for role === 'superadmin' — every other role belongs to exactly one branch.
+  branch_id: string | null;
+  synced?: boolean;
 }
 
+// Shared identity — same ingredient exists once no matter how many branches stock it.
 export interface Ingredient {
   ingredient_id: string;
   name: string;
   unit: 'g' | 'kg' | 'ml' | 'l' | 'pcs';
+  synced?: boolean;
+}
+
+// Per-branch stock level for a shared ingredient.
+export interface IngredientStock {
+  branch_id: string;
+  ingredient_id: string;
   quantity_on_hand: number;
   last_purchase_cost: number;
   low_stock_threshold: number;
   synced?: boolean;
 }
 
+// Menu is shared across branches — unchanged from the single-branch schema.
 export interface RecipeItem {
   dish_name: string;
   selling_price: number;
   ingredient_id: string;
   quantity_per_plate: number;
-  synced?: boolean;  // <-- ADD THIS
+  synced?: boolean;
+}
+
+export type AssetCategory = 'furniture' | 'kitchenware' | 'cutlery' | 'electronics' | 'other';
+export type AssetCondition = 'good' | 'fair' | 'damaged' | 'lost';
+
+// Fixed assets — tables, chairs, sufurias, cups, spoons. Unlike Ingredient,
+// there's no shared-identity split: a physical chair belongs to exactly one
+// branch, so branch_id lives directly on the row.
+export interface FixedAsset {
+  asset_id: string;
+  branch_id: string;
+  name: string;
+  category: AssetCategory;
+  quantity: number;
+  unit_cost?: number;
+  condition: AssetCondition;
+  notes?: string;
+  synced?: boolean;
 }
 
 export type PaymentStatus = 'active' | 'paid' | 'credit' | 'unpaid_loss';
@@ -7308,6 +8459,7 @@ export interface OrderItem {
 
 export interface Order {
   order_id: string;
+  branch_id: string;
   payment_status: PaymentStatus;
   payment_method?: PaymentMethod;
   mpesa_code?: string;
@@ -7324,6 +8476,7 @@ export type WasteReason = 'burnt_overcooked' | 'spilled_dropped' | 'spoiled_raw'
 
 export interface WasteLog {
   waste_id: string;
+  branch_id: string;
   dish_or_ingredient: string;
   quantity: number;
   reason: WasteReason;
@@ -7335,6 +8488,7 @@ export interface WasteLog {
 
 export interface StaffLedger {
   ledger_id: string;
+  branch_id: string;
   staff_id: string;
   date: string;
   shortage_amount: number;
@@ -7342,6 +8496,19 @@ export interface StaffLedger {
   reason: string;
   payroll_deduction_status: 'pending' | 'deducted' | 'waived';
   synced?: boolean;
+}
+
+// One row per branch per month — mirrors the `monthly_branch_stats` SQL view,
+// queried directly from Supabase for the SuperAdmin Overview tab (not stored
+// locally in Dexie — this is a reporting view, not offline-first data).
+export interface MonthlyBranchStats {
+  branch_id: string;
+  month: string; // first-of-month date, e.g. "2026-07-01"
+  revenue: number;
+  cogs: number;
+  waste_units: number;
+  monthly_payroll: number;
+  shortages_and_spoilage_cost: number;
 }
 </file>
 
@@ -7352,6 +8519,7 @@ import { db } from '../db/kibandaDB';
 import { requestSync, deleteUserRemote } from '../db/sync';
 import { useAuth } from '../context/AuthContext';
 import { StockMenuManager } from './StockMenuManager';
+import { FixedAssetsManager } from './FixedAssetsManager';
 import { Pagination } from '../components/Pagination';
 import { usePagination } from '../components/usePagination';
 import { SearchInput } from '../components/SearchInput';
@@ -7373,21 +8541,50 @@ import {
   Trash2,
   Pencil,
   LayoutGrid,
+  Boxes,
 } from 'lucide-react';
 
 const money = (n: number) => `KES ${n.toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
 const isToday = (iso: string) => new Date(iso).toDateString() === new Date().toDateString();
 
-type AdminTab = 'overview' | 'stock' | 'staff' | 'money';
+type AdminTab = 'overview' | 'stock' | 'assets' | 'staff' | 'money';
 
 export const AdminDashboard: React.FC = () => {
   const { currentUser } = useAuth();
-  const staff = useLiveQuery(() => db.users.toArray(), []);
-  const orders = useLiveQuery(() => db.orders.toArray(), []);
-  const ingredients = useLiveQuery(() => db.ingredients.toArray(), []);
-  const ledgers = useLiveQuery(
+  const myBranchId = currentUser?.branch_id ?? null;
+
+  const branches = useLiveQuery(() => db.branches.toArray(), []);
+  const myBranch = (branches ?? []).find((b) => b.branch_id === myBranchId);
+
+  // Unfiltered — PIN uniqueness has to hold across every branch, since a
+  // shared device pulls every branch's users and login is by PIN alone.
+  const allUsers = useLiveQuery(() => db.users.toArray(), []);
+  const staff = useMemo(
+    () => (allUsers ?? []).filter((u) => u.branch_id === myBranchId),
+    [allUsers, myBranchId]
+  );
+
+  const allOrders = useLiveQuery(() => db.orders.toArray(), []);
+  const orders = useMemo(
+    () => (allOrders ?? []).filter((o) => o.branch_id === myBranchId),
+    [allOrders, myBranchId]
+  );
+
+  // Ingredients are shared identity now; the quantities/costs an admin cares
+  // about here live in ingredientStock, one row per branch per ingredient.
+  const allIngredientStock = useLiveQuery(() => db.ingredientStock.toArray(), []);
+  const ingredientStockRows = useMemo(
+    () => (allIngredientStock ?? []).filter((s) => s.branch_id === myBranchId),
+    [allIngredientStock, myBranchId]
+  );
+
+  const allLedgers = useLiveQuery(
     () => db.staffLedgers.orderBy('date').reverse().toArray(),
     []
+  );
+  const ledgers = useMemo(
+    () => (allLedgers ?? []).filter((l) => l.branch_id === myBranchId),
+    [allLedgers, myBranchId]
   );
 
   const staffMap = new Map((staff ?? []).map((s) => [s.user_id, s]));
@@ -7446,11 +8643,11 @@ export const AdminDashboard: React.FC = () => {
   // Stock overview
   // ---------------------------------------------------------------------
   const stock = useMemo(() => {
-    const list = ingredients ?? [];
-    const lowStock = list.filter((i) => i.quantity_on_hand <= i.low_stock_threshold);
-    const stockValue = list.reduce((sum, i) => sum + i.quantity_on_hand * i.last_purchase_cost, 0);
+    const list = ingredientStockRows;
+    const lowStock = list.filter((s) => s.quantity_on_hand <= s.low_stock_threshold);
+    const stockValue = list.reduce((sum, s) => sum + s.quantity_on_hand * s.last_purchase_cost, 0);
     return { list, lowStock, stockValue };
-  }, [ingredients]);
+  }, [ingredientStockRows]);
 
   // ---------------------------------------------------------------------
   // Payroll — pending + already-deducted ledger entries reduce a staff
@@ -7497,9 +8694,13 @@ export const AdminDashboard: React.FC = () => {
       setStaffError('PIN must be exactly 4 digits.');
       return;
     }
-    const pinTaken = (staff ?? []).some((s) => s.pin_code === newPin);
+    const pinTaken = (allUsers ?? []).some((s) => s.pin_code === newPin);
     if (pinTaken) {
       setStaffError('That PIN is already in use — pick a different one.');
+      return;
+    }
+    if (!myBranchId) {
+      setStaffError('Your account has no branch assigned — contact the owner.');
       return;
     }
 
@@ -7510,6 +8711,8 @@ export const AdminDashboard: React.FC = () => {
       pin_code: newPin,
       active_shift: true,
       basic_salary: parseFloat(newSalary) || 0,
+      branch_id: myBranchId,
+      synced: false,
     });
     requestSync();
     resetStaffForm();
@@ -7517,7 +8720,7 @@ export const AdminDashboard: React.FC = () => {
   };
 
   const toggleActiveShift = async (userId: string, current: boolean) => {
-    await db.users.update(userId, { active_shift: !current });
+    await db.users.update(userId, { active_shift: !current, synced: false });
     requestSync();
   };
 
@@ -7531,7 +8734,7 @@ export const AdminDashboard: React.FC = () => {
       setConfirmDeleteStaff(null);
       return; // guarded in the UI already, but double-check before any write
     }
-    const adminCount = (staff ?? []).filter((s) => s.role === 'admin').length;
+    const adminCount = staff.filter((s) => s.role === 'admin').length;
     if (target.role === 'admin' && adminCount <= 1) {
       setConfirmDeleteStaff(null);
       return; // must always keep at least one admin account
@@ -7565,7 +8768,7 @@ export const AdminDashboard: React.FC = () => {
       setEditError('PIN must be exactly 4 digits.');
       return;
     }
-    const pinTaken = (staff ?? []).some(
+    const pinTaken = (allUsers ?? []).some(
       (s) => s.pin_code === editPin && s.user_id !== editingStaff.user_id
     );
     if (pinTaken) {
@@ -7576,6 +8779,7 @@ export const AdminDashboard: React.FC = () => {
     await db.users.update(editingStaff.user_id, {
       pin_code: editPin,
       basic_salary: parseFloat(editSalary) || 0,
+      synced: false,
     });
     requestSync();
     setEditingStaff(null);
@@ -7651,8 +8855,11 @@ export const AdminDashboard: React.FC = () => {
     const spoilage = parseFloat(formSpoilage) || 0;
     if (shortage === 0 && spoilage === 0) return;
 
+    if (!myBranchId) return;
+
     const entry: StaffLedger = {
       ledger_id: crypto.randomUUID(),
+      branch_id: myBranchId,
       staff_id: formStaffId,
       date: new Date().toISOString(),
       shortage_amount: shortage,
@@ -7724,6 +8931,7 @@ export const AdminDashboard: React.FC = () => {
   const TABS: { id: AdminTab; label: string; icon: typeof TrendingUp; badge?: number }[] = [
     { id: 'overview', label: 'Overview', icon: LayoutGrid },
     { id: 'stock', label: 'Stock', icon: Package, badge: stock.lowStock.length },
+    { id: 'assets', label: 'Assets', icon: Boxes },
     { id: 'staff', label: 'Staff', icon: Users },
     { id: 'money', label: 'Money', icon: Wallet, badge: creditOrders.length },
   ];
@@ -7741,7 +8949,7 @@ export const AdminDashboard: React.FC = () => {
           </div>
           <div>
             <h2 className="font-mono text-xs font-bold text-white uppercase tracking-wider">
-              OWNER DASHBOARD
+              {myBranch?.name ?? 'OWNER DASHBOARD'}
             </h2>
             <p className="text-[10px] font-mono text-zinc-500 uppercase tracking-widest">
               SALES · STOCK · STAFF
@@ -7875,6 +9083,9 @@ export const AdminDashboard: React.FC = () => {
 
       {/* ===================== STOCK TAB ===================== */}
       {activeTab === 'stock' && <StockMenuManager />}
+
+      {/* ===================== ASSETS TAB ===================== */}
+      {activeTab === 'assets' && <FixedAssetsManager />}
 
       {/* ===================== STAFF TAB ===================== */}
       {activeTab === 'staff' && (

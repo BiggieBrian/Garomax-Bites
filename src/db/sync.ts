@@ -2,11 +2,14 @@ import { supabase, isSupabaseConfigured } from '../lib/supabase';
 import { db } from './kibandaDB';
 import type {
   User,
+  Branch,
   Ingredient,
+  IngredientStock,
   RecipeItem,
   Order,
   WasteLog,
   StaffLedger,
+  FixedAsset,
 } from '../types';
 
 export type SyncStatus = 'offline' | 'syncing' | 'synced' | 'error';
@@ -32,10 +35,29 @@ export function onSyncStatusChange(cb: Listener): () => void {
 // Row <-> local type mapping. Orders and WasteLog store their date under
 // `timestamp` locally, but the Postgres column is called `ts` (avoids the
 // reserved-word-flavoured `timestamp` name in SQL).
+//
+// Note on scope: every device pulls every branch's data (see pullAll below).
+// Each screen is responsible for filtering by branch_id itself — this file
+// doesn't do server-side branch filtering. Fine at "two mini restaurants"
+// scale; revisit if branch count or data volume grows a lot.
 // ---------------------------------------------------------------------------
+
+const branchToRow = (b: Branch) => ({
+  branch_id: b.branch_id,
+  name: b.name,
+  location: b.location ?? null,
+});
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const branchFromRow = (r: any): Branch => ({
+  branch_id: r.branch_id,
+  name: r.name,
+  location: r.location ?? undefined,
+});
 
 const orderToRow = (o: Order) => ({
   order_id: o.order_id,
+  branch_id: o.branch_id,
   payment_status: o.payment_status,
   payment_method: o.payment_method ?? null,
   mpesa_code: o.mpesa_code ?? null,
@@ -50,6 +72,7 @@ const orderToRow = (o: Order) => ({
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const orderFromRow = (r: any): Order => ({
   order_id: r.order_id,
+  branch_id: r.branch_id,
   payment_status: r.payment_status,
   payment_method: r.payment_method ?? undefined,
   mpesa_code: r.mpesa_code ?? undefined,
@@ -64,6 +87,7 @@ const orderFromRow = (r: any): Order => ({
 
 const wasteToRow = (w: WasteLog) => ({
   waste_id: w.waste_id,
+  branch_id: w.branch_id,
   dish_or_ingredient: w.dish_or_ingredient,
   quantity: w.quantity,
   reason: w.reason,
@@ -75,6 +99,7 @@ const wasteToRow = (w: WasteLog) => ({
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const wasteFromRow = (r: any): WasteLog => ({
   waste_id: r.waste_id,
+  branch_id: r.branch_id,
   dish_or_ingredient: r.dish_or_ingredient,
   quantity: r.quantity,
   reason: r.reason,
@@ -86,6 +111,7 @@ const wasteFromRow = (r: any): WasteLog => ({
 
 const ledgerToRow = (l: StaffLedger) => ({
   ledger_id: l.ledger_id,
+  branch_id: l.branch_id,
   staff_id: l.staff_id,
   date: l.date,
   shortage_amount: l.shortage_amount,
@@ -97,6 +123,7 @@ const ledgerToRow = (l: StaffLedger) => ({
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const ledgerFromRow = (r: any): StaffLedger => ({
   ledger_id: r.ledger_id,
+  branch_id: r.branch_id,
   staff_id: r.staff_id,
   date: r.date,
   shortage_amount: r.shortage_amount,
@@ -106,13 +133,11 @@ const ledgerFromRow = (r: any): StaffLedger => ({
   synced: true,
 });
 
+// Ingredients are now shared identity only — name + unit, no branch_id.
 const ingredientToRow = (i: Ingredient) => ({
   ingredient_id: i.ingredient_id,
   name: i.name,
   unit: i.unit,
-  quantity_on_hand: i.quantity_on_hand,
-  last_purchase_cost: i.last_purchase_cost,
-  low_stock_threshold: i.low_stock_threshold,
 });
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -120,6 +145,22 @@ const ingredientFromRow = (r: any): Ingredient => ({
   ingredient_id: r.ingredient_id,
   name: r.name,
   unit: r.unit,
+  synced: true,
+});
+
+// Stock levels are per-branch.
+const ingredientStockToRow = (s: IngredientStock) => ({
+  branch_id: s.branch_id,
+  ingredient_id: s.ingredient_id,
+  quantity_on_hand: s.quantity_on_hand,
+  last_purchase_cost: s.last_purchase_cost,
+  low_stock_threshold: s.low_stock_threshold,
+});
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const ingredientStockFromRow = (r: any): IngredientStock => ({
+  branch_id: r.branch_id,
+  ingredient_id: r.ingredient_id,
   quantity_on_hand: r.quantity_on_hand,
   last_purchase_cost: r.last_purchase_cost,
   low_stock_threshold: r.low_stock_threshold,
@@ -133,6 +174,7 @@ const userToRow = (u: User) => ({
   pin_code: u.pin_code,
   active_shift: u.active_shift,
   basic_salary: u.basic_salary,
+  branch_id: u.branch_id,
 });
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -143,6 +185,7 @@ const userFromRow = (r: any): User => ({
   pin_code: r.pin_code,
   active_shift: r.active_shift,
   basic_salary: r.basic_salary ?? 0,
+  branch_id: r.branch_id ?? null,
   synced: true,
 });
 
@@ -162,9 +205,41 @@ const recipeFromRow = (r: any): RecipeItem => ({
   synced: true,
 });
 
+const assetToRow = (a: FixedAsset) => ({
+  asset_id: a.asset_id,
+  branch_id: a.branch_id,
+  name: a.name,
+  category: a.category,
+  quantity: a.quantity,
+  unit_cost: a.unit_cost ?? null,
+  condition: a.condition,
+  notes: a.notes ?? null,
+});
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const assetFromRow = (r: any): FixedAsset => ({
+  asset_id: r.asset_id,
+  branch_id: r.branch_id,
+  name: r.name,
+  category: r.category,
+  quantity: r.quantity,
+  unit_cost: r.unit_cost ?? undefined,
+  condition: r.condition,
+  notes: r.notes ?? undefined,
+  synced: true,
+});
+
 // ---------------------------------------------------------------------------
 // Push: send local unsynced rows up to Supabase, then mark them synced.
 // ---------------------------------------------------------------------------
+
+async function pushUnsyncedBranches() {
+  const rows = await db.branches.filter((b) => (b as Branch & { synced?: boolean }).synced === false).toArray();
+  if (rows.length === 0) return;
+  const { error } = await supabase.from('branches').upsert(rows.map(branchToRow));
+  if (error) throw error;
+  await db.branches.bulkUpdate(rows.map((r) => ({ key: r.branch_id, changes: { synced: true } })));
+}
 
 async function pushUnsyncedOrders() {
   const rows = await db.orders.filter((o) => o.synced === false).toArray();
@@ -200,6 +275,16 @@ async function pushUnsyncedIngredients() {
   );
 }
 
+async function pushUnsyncedIngredientStock() {
+  const rows = await db.ingredientStock.filter((s) => s.synced === false).toArray();
+  if (rows.length === 0) return;
+  const { error } = await supabase.from('ingredient_stock').upsert(rows.map(ingredientStockToRow));
+  if (error) throw error;
+  await db.ingredientStock.bulkUpdate(
+    rows.map((r) => ({ key: [r.branch_id, r.ingredient_id], changes: { synced: true } }))
+  );
+}
+
 async function pushUnsyncedUsers() {
   const rows = await db.users.filter((u) => u.synced === false).toArray();
   if (rows.length === 0) return;
@@ -218,16 +303,27 @@ async function pushUnsyncedRecipes() {
   );
 }
 
+async function pushUnsyncedAssets() {
+  const rows = await db.fixedAssets.filter((a) => a.synced === false).toArray();
+  if (rows.length === 0) return;
+  const { error } = await supabase.from('fixed_assets').upsert(rows.map(assetToRow));
+  if (error) throw error;
+  await db.fixedAssets.bulkUpdate(rows.map((r) => ({ key: r.asset_id, changes: { synced: true } })));
+}
+
 /** Push every table's pending local changes up to Supabase. */
 export async function pushAll() {
   if (!isSupabaseConfigured) return;
   await Promise.all([
+    pushUnsyncedBranches(),
     pushUnsyncedOrders(),
     pushUnsyncedWaste(),
     pushUnsyncedLedgers(),
     pushUnsyncedIngredients(),
+    pushUnsyncedIngredientStock(),
     pushUnsyncedUsers(),
     pushUnsyncedRecipes(),
+    pushUnsyncedAssets(),
   ]);
 }
 
@@ -246,6 +342,8 @@ export async function deleteUserRemote(userId: string) {
 
 export async function deleteIngredientRemote(ingredientId: string) {
   if (!isSupabaseConfigured || !navigator.onLine) return;
+  // ingredient_stock rows cascade-delete in Postgres (on delete cascade), so
+  // only the definition row needs an explicit delete here.
   const { error } = await supabase.from('ingredients').delete().eq('ingredient_id', ingredientId);
   if (error) console.error('[Garomax] delete ingredient remote error', error);
 }
@@ -266,26 +364,39 @@ export async function deleteRecipeLineRemote(dishName: string, ingredientId: str
   if (error) console.error('[Garomax] delete recipe line remote error', error);
 }
 
+export async function deleteAssetRemote(assetId: string) {
+  if (!isSupabaseConfigured || !navigator.onLine) return;
+  const { error } = await supabase.from('fixed_assets').delete().eq('asset_id', assetId);
+  if (error) console.error('[Garomax] delete asset remote error', error);
+}
+
 // ---------------------------------------------------------------------------
 // Pull: bring remote rows down into Dexie (used on startup and via realtime).
+// Every device pulls every branch — see the note at the top of this file.
 // ---------------------------------------------------------------------------
 
 async function pullAll() {
-  const [users, ingredients, recipes, orders, waste, ledgers] = await Promise.all([
+  const [branches, users, ingredients, ingredientStock, recipes, orders, waste, ledgers, assets] = await Promise.all([
+    supabase.from('branches').select('*'),
     supabase.from('users').select('*'),
     supabase.from('ingredients').select('*'),
+    supabase.from('ingredient_stock').select('*'),
     supabase.from('recipes').select('*'),
     supabase.from('orders').select('*'),
     supabase.from('waste_logs').select('*'),
     supabase.from('staff_ledgers').select('*'),
+    supabase.from('fixed_assets').select('*'),
   ]);
 
+  if (branches.data?.length) await db.branches.bulkPut(branches.data.map(branchFromRow));
   if (users.data?.length) await db.users.bulkPut(users.data.map(userFromRow));
   if (ingredients.data?.length) await db.ingredients.bulkPut(ingredients.data.map(ingredientFromRow));
+  if (ingredientStock.data?.length) await db.ingredientStock.bulkPut(ingredientStock.data.map(ingredientStockFromRow));
   if (recipes.data?.length) await db.recipes.bulkPut(recipes.data.map(recipeFromRow));
   if (orders.data?.length) await db.orders.bulkPut(orders.data.map(orderFromRow));
   if (waste.data?.length) await db.wasteLogs.bulkPut(waste.data.map(wasteFromRow));
   if (ledgers.data?.length) await db.staffLedgers.bulkPut(ledgers.data.map(ledgerFromRow));
+  if (assets.data?.length) await db.fixedAssets.bulkPut(assets.data.map(assetFromRow));
 }
 
 // ---------------------------------------------------------------------------
@@ -297,6 +408,13 @@ function subscribeRealtime() {
   const channel = supabase.channel('garomax-sync');
 
   channel
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'branches' }, (payload) => {
+      if (payload.eventType === 'DELETE') {
+        if (payload.old?.branch_id) db.branches.delete(payload.old.branch_id);
+        return;
+      }
+      db.branches.put(branchFromRow(payload.new));
+    })
     .on('postgres_changes', { event: '*', schema: 'public', table: 'orders' }, (payload) => {
       if (payload.eventType === 'DELETE') {
         if (payload.old?.order_id) db.orders.delete(payload.old.order_id);
@@ -310,6 +428,15 @@ function subscribeRealtime() {
         return;
       }
       db.ingredients.put(ingredientFromRow(payload.new));
+    })
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'ingredient_stock' }, (payload) => {
+      if (payload.eventType === 'DELETE') {
+        if (payload.old?.branch_id && payload.old?.ingredient_id) {
+          db.ingredientStock.delete([payload.old.branch_id, payload.old.ingredient_id]);
+        }
+        return;
+      }
+      db.ingredientStock.put(ingredientStockFromRow(payload.new));
     })
     .on('postgres_changes', { event: '*', schema: 'public', table: 'waste_logs' }, (payload) => {
       if (payload.eventType === 'DELETE') {
@@ -340,6 +467,13 @@ function subscribeRealtime() {
         return;
       }
       db.recipes.put(recipeFromRow(payload.new));
+    })
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'fixed_assets' }, (payload) => {
+      if (payload.eventType === 'DELETE') {
+        if (payload.old?.asset_id) db.fixedAssets.delete(payload.old.asset_id);
+        return;
+      }
+      db.fixedAssets.put(assetFromRow(payload.new));
     })
     .subscribe();
 

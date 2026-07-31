@@ -3,7 +3,9 @@ import { useLiveQuery } from 'dexie-react-hooks';
 import { db } from '../db/kibandaDB';
 import { requestSync, deleteUserRemote } from '../db/sync';
 import { useAuth } from '../context/AuthContext';
+import { useActiveBranchId } from '../context/BranchScopeContext';
 import { StockMenuManager } from './StockMenuManager';
+import { FixedAssetsManager } from './FixedAssetsManager';
 import { Pagination } from '../components/Pagination';
 import { usePagination } from '../components/usePagination';
 import { SearchInput } from '../components/SearchInput';
@@ -25,21 +27,50 @@ import {
   Trash2,
   Pencil,
   LayoutGrid,
+  Boxes,
 } from 'lucide-react';
 
 const money = (n: number) => `KES ${n.toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
 const isToday = (iso: string) => new Date(iso).toDateString() === new Date().toDateString();
 
-type AdminTab = 'overview' | 'stock' | 'staff' | 'money';
+type AdminTab = 'overview' | 'stock' | 'assets' | 'staff' | 'money';
 
 export const AdminDashboard: React.FC = () => {
   const { currentUser } = useAuth();
-  const staff = useLiveQuery(() => db.users.toArray(), []);
-  const orders = useLiveQuery(() => db.orders.toArray(), []);
-  const ingredients = useLiveQuery(() => db.ingredients.toArray(), []);
-  const ledgers = useLiveQuery(
+  const myBranchId = useActiveBranchId();
+
+  const branches = useLiveQuery(() => db.branches.toArray(), []);
+  const myBranch = (branches ?? []).find((b) => b.branch_id === myBranchId);
+
+  // Unfiltered — PIN uniqueness has to hold across every branch, since a
+  // shared device pulls every branch's users and login is by PIN alone.
+  const allUsers = useLiveQuery(() => db.users.toArray(), []);
+  const staff = useMemo(
+    () => (allUsers ?? []).filter((u) => u.branch_id === myBranchId),
+    [allUsers, myBranchId]
+  );
+
+  const allOrders = useLiveQuery(() => db.orders.toArray(), []);
+  const orders = useMemo(
+    () => (allOrders ?? []).filter((o) => o.branch_id === myBranchId),
+    [allOrders, myBranchId]
+  );
+
+  // Ingredients are shared identity now; the quantities/costs an admin cares
+  // about here live in ingredientStock, one row per branch per ingredient.
+  const allIngredientStock = useLiveQuery(() => db.ingredientStock.toArray(), []);
+  const ingredientStockRows = useMemo(
+    () => (allIngredientStock ?? []).filter((s) => s.branch_id === myBranchId),
+    [allIngredientStock, myBranchId]
+  );
+
+  const allLedgers = useLiveQuery(
     () => db.staffLedgers.orderBy('date').reverse().toArray(),
     []
+  );
+  const ledgers = useMemo(
+    () => (allLedgers ?? []).filter((l) => l.branch_id === myBranchId),
+    [allLedgers, myBranchId]
   );
 
   const staffMap = new Map((staff ?? []).map((s) => [s.user_id, s]));
@@ -98,11 +129,11 @@ export const AdminDashboard: React.FC = () => {
   // Stock overview
   // ---------------------------------------------------------------------
   const stock = useMemo(() => {
-    const list = ingredients ?? [];
-    const lowStock = list.filter((i) => i.quantity_on_hand <= i.low_stock_threshold);
-    const stockValue = list.reduce((sum, i) => sum + i.quantity_on_hand * i.last_purchase_cost, 0);
+    const list = ingredientStockRows;
+    const lowStock = list.filter((s) => s.quantity_on_hand <= s.low_stock_threshold);
+    const stockValue = list.reduce((sum, s) => sum + s.quantity_on_hand * s.last_purchase_cost, 0);
     return { list, lowStock, stockValue };
-  }, [ingredients]);
+  }, [ingredientStockRows]);
 
   // ---------------------------------------------------------------------
   // Payroll — pending + already-deducted ledger entries reduce a staff
@@ -149,9 +180,13 @@ export const AdminDashboard: React.FC = () => {
       setStaffError('PIN must be exactly 4 digits.');
       return;
     }
-    const pinTaken = (staff ?? []).some((s) => s.pin_code === newPin);
+    const pinTaken = (allUsers ?? []).some((s) => s.pin_code === newPin);
     if (pinTaken) {
       setStaffError('That PIN is already in use — pick a different one.');
+      return;
+    }
+    if (!myBranchId) {
+      setStaffError('Your account has no branch assigned — contact the owner.');
       return;
     }
 
@@ -162,6 +197,7 @@ export const AdminDashboard: React.FC = () => {
       pin_code: newPin,
       active_shift: true,
       basic_salary: parseFloat(newSalary) || 0,
+      branch_id: myBranchId,
       synced: false,
     });
     requestSync();
@@ -184,7 +220,7 @@ export const AdminDashboard: React.FC = () => {
       setConfirmDeleteStaff(null);
       return; // guarded in the UI already, but double-check before any write
     }
-    const adminCount = (staff ?? []).filter((s) => s.role === 'admin').length;
+    const adminCount = staff.filter((s) => s.role === 'admin').length;
     if (target.role === 'admin' && adminCount <= 1) {
       setConfirmDeleteStaff(null);
       return; // must always keep at least one admin account
@@ -218,7 +254,7 @@ export const AdminDashboard: React.FC = () => {
       setEditError('PIN must be exactly 4 digits.');
       return;
     }
-    const pinTaken = (staff ?? []).some(
+    const pinTaken = (allUsers ?? []).some(
       (s) => s.pin_code === editPin && s.user_id !== editingStaff.user_id
     );
     if (pinTaken) {
@@ -305,8 +341,11 @@ export const AdminDashboard: React.FC = () => {
     const spoilage = parseFloat(formSpoilage) || 0;
     if (shortage === 0 && spoilage === 0) return;
 
+    if (!myBranchId) return;
+
     const entry: StaffLedger = {
       ledger_id: crypto.randomUUID(),
+      branch_id: myBranchId,
       staff_id: formStaffId,
       date: new Date().toISOString(),
       shortage_amount: shortage,
@@ -378,6 +417,7 @@ export const AdminDashboard: React.FC = () => {
   const TABS: { id: AdminTab; label: string; icon: typeof TrendingUp; badge?: number }[] = [
     { id: 'overview', label: 'Overview', icon: LayoutGrid },
     { id: 'stock', label: 'Stock', icon: Package, badge: stock.lowStock.length },
+    { id: 'assets', label: 'Assets', icon: Boxes },
     { id: 'staff', label: 'Staff', icon: Users },
     { id: 'money', label: 'Money', icon: Wallet, badge: creditOrders.length },
   ];
@@ -395,7 +435,7 @@ export const AdminDashboard: React.FC = () => {
           </div>
           <div>
             <h2 className="font-mono text-xs font-bold text-white uppercase tracking-wider">
-              OWNER DASHBOARD
+              {myBranch?.name ?? 'OWNER DASHBOARD'}
             </h2>
             <p className="text-[10px] font-mono text-zinc-500 uppercase tracking-widest">
               SALES · STOCK · STAFF
@@ -529,6 +569,9 @@ export const AdminDashboard: React.FC = () => {
 
       {/* ===================== STOCK TAB ===================== */}
       {activeTab === 'stock' && <StockMenuManager />}
+
+      {/* ===================== ASSETS TAB ===================== */}
+      {activeTab === 'assets' && <FixedAssetsManager />}
 
       {/* ===================== STAFF TAB ===================== */}
       {activeTab === 'staff' && (
