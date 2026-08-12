@@ -149,8 +149,13 @@ export const FixedAssetsManager: React.FC = () => {
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
 
   const handleDelete = async (id: string) => {
+    const ok = await deleteAssetRemote(id);
+    if (!ok) {
+      setFormError('Could not delete on the server — check your connection and try again.');
+      setConfirmDelete(null);
+      return;
+    }
     await db.fixedAssets.delete(id);
-    deleteAssetRemote(id);
     setConfirmDelete(null);
   };
 
@@ -324,11 +329,10 @@ export const FixedAssetsManager: React.FC = () => {
                     <button
                       key={c}
                       onClick={() => setCategory(c)}
-                      className={`py-2 text-[9px] font-mono font-bold uppercase rounded-lg border transition ${
-                        category === c
+                      className={`py-2 text-[9px] font-mono font-bold uppercase rounded-lg border transition ${category === c
                           ? 'bg-orange-500 text-zinc-950 border-orange-400'
                           : 'bg-zinc-800 text-zinc-400 border-zinc-700'
-                      }`}
+                        }`}
                     >
                       {c}
                     </button>
@@ -374,11 +378,10 @@ export const FixedAssetsManager: React.FC = () => {
                     <button
                       key={c}
                       onClick={() => setCondition(c)}
-                      className={`py-2 text-[9px] font-mono font-bold uppercase rounded-lg border transition ${
-                        condition === c
+                      className={`py-2 text-[9px] font-mono font-bold uppercase rounded-lg border transition ${condition === c
                           ? 'bg-orange-500 text-zinc-950 border-orange-400'
                           : 'bg-zinc-800 text-zinc-400 border-zinc-700'
-                      }`}
+                        }`}
                     >
                       {c}
                     </button>
@@ -469,11 +472,10 @@ export const FixedAssetsManager: React.FC = () => {
                     <button
                       key={c}
                       onClick={() => setEditCondition(c)}
-                      className={`py-2 text-[9px] font-mono font-bold uppercase rounded-lg border transition ${
-                        editCondition === c
+                      className={`py-2 text-[9px] font-mono font-bold uppercase rounded-lg border transition ${editCondition === c
                           ? 'bg-orange-500 text-zinc-950 border-orange-400'
                           : 'bg-zinc-800 text-zinc-400 border-zinc-700'
-                      }`}
+                        }`}
                     >
                       {c}
                     </button>

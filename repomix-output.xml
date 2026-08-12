@@ -66,6 +66,7 @@ src/
     usePagination.ts
   context/
     AuthContext.tsx
+    BranchScopeContext.tsx
   db/
     kibandaDB.ts
     seedLocalData.ts
@@ -117,751 +118,6 @@ vite.config.ts
 
 <files>
 This section contains the contents of the repository's files.
-
-<file path="src/components/BranchManager.tsx">
-import React, { useState } from 'react';
-import { useLiveQuery } from 'dexie-react-hooks';
-import { db } from '../db/kibandaDB';
-import { requestSync } from '../db/sync';
-import type { Branch } from '../types';
-import { Building2, Plus, Pencil, Check, X, MapPin } from 'lucide-react';
-
-function slugify(name: string): string {
-  return name
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/(^-|-$)/g, '') || 'branch';
-}
-
-export const BranchManager: React.FC = () => {
-  const branches = useLiveQuery(() => db.branches.toArray(), []) ?? [];
-
-  // -------------------------------------------------------------------
-  // Add branch
-  // -------------------------------------------------------------------
-  const [showAddForm, setShowAddForm] = useState(false);
-  const [name, setName] = useState('');
-  const [location, setLocation] = useState('');
-  const [error, setError] = useState('');
-
-  const resetAddForm = () => {
-    setName('');
-    setLocation('');
-    setError('');
-  };
-
-  const handleAddBranch = async () => {
-    setError('');
-    if (!name.trim()) return setError('Enter a branch name.');
-
-    const baseId = slugify(name);
-    let branchId = baseId;
-    let suffix = 2;
-    // Guard against two branches slugifying to the same id (e.g. two
-    // branches both named "Town Centre").
-    while (branches.some((b) => b.branch_id === branchId)) {
-      branchId = `${baseId}-${suffix}`;
-      suffix += 1;
-    }
-
-    await db.branches.add({
-      branch_id: branchId,
-      name: name.trim(),
-      location: location.trim() || undefined,
-      synced: false,
-    });
-    requestSync();
-    resetAddForm();
-    setShowAddForm(false);
-  };
-
-  // -------------------------------------------------------------------
-  // Rename / edit branch
-  // -------------------------------------------------------------------
-  const [editingId, setEditingId] = useState<string | null>(null);
-  const [editName, setEditName] = useState('');
-  const [editLocation, setEditLocation] = useState('');
-
-  const startEditing = (branch: Branch) => {
-    setEditingId(branch.branch_id);
-    setEditName(branch.name);
-    setEditLocation(branch.location ?? '');
-  };
-
-  const cancelEditing = () => {
-    setEditingId(null);
-    setEditName('');
-    setEditLocation('');
-  };
-
-  const saveEditing = async () => {
-    if (!editingId || !editName.trim()) return;
-    await db.branches.update(editingId, {
-      name: editName.trim(),
-      location: editLocation.trim() || undefined,
-      synced: false,
-    });
-    requestSync();
-    cancelEditing();
-  };
-
-  return (
-    <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <Building2 className="w-4 h-4 text-orange-400" />
-          <h2 className="text-sm font-bold text-white uppercase tracking-wider">Branches</h2>
-        </div>
-        <button
-          onClick={() => setShowAddForm((v) => !v)}
-          className="flex items-center gap-1 text-xs font-medium bg-orange-500/10 text-orange-400 border border-orange-500/20 px-2.5 py-1.5 rounded-lg hover:bg-orange-500/20 transition active:scale-95"
-        >
-          <Plus className="w-3.5 h-3.5" />
-          Add Branch
-        </button>
-      </div>
-
-      {showAddForm && (
-        <div className="bg-zinc-900/80 border border-zinc-800/80 rounded-xl p-3 space-y-2">
-          <input
-            autoFocus
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            placeholder="Branch name (e.g. Westlands Branch)"
-            className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-sm text-zinc-100 placeholder:text-zinc-600 focus:outline-none focus:border-orange-500/50"
-          />
-          <input
-            value={location}
-            onChange={(e) => setLocation(e.target.value)}
-            placeholder="Location (optional)"
-            className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-sm text-zinc-100 placeholder:text-zinc-600 focus:outline-none focus:border-orange-500/50"
-          />
-          {error && <p className="text-xs text-red-400">{error}</p>}
-          <div className="flex gap-2 pt-1">
-            <button
-              onClick={handleAddBranch}
-              className="flex-1 bg-orange-500 text-white text-xs font-bold py-2 rounded-lg hover:bg-orange-400 transition active:scale-95"
-            >
-              Save Branch
-            </button>
-            <button
-              onClick={() => {
-                resetAddForm();
-                setShowAddForm(false);
-              }}
-              className="px-3 text-xs text-zinc-400 hover:text-white"
-            >
-              Cancel
-            </button>
-          </div>
-        </div>
-      )}
-
-      <div className="space-y-2">
-        {branches.length === 0 && (
-          <p className="text-xs text-zinc-500 text-center py-6">
-            No branches yet — add your first one above.
-          </p>
-        )}
-
-        {branches.map((branch) => (
-          <div
-            key={branch.branch_id}
-            className="bg-zinc-900/80 border border-zinc-800/80 rounded-xl p-3"
-          >
-            {editingId === branch.branch_id ? (
-              <div className="space-y-2">
-                <input
-                  autoFocus
-                  value={editName}
-                  onChange={(e) => setEditName(e.target.value)}
-                  className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-sm text-zinc-100 focus:outline-none focus:border-orange-500/50"
-                />
-                <input
-                  value={editLocation}
-                  onChange={(e) => setEditLocation(e.target.value)}
-                  placeholder="Location (optional)"
-                  className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-sm text-zinc-100 placeholder:text-zinc-600 focus:outline-none focus:border-orange-500/50"
-                />
-                <div className="flex gap-2">
-                  <button
-                    onClick={saveEditing}
-                    className="flex items-center gap-1 text-xs font-bold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 px-2.5 py-1.5 rounded-lg hover:bg-emerald-500/20 transition"
-                  >
-                    <Check className="w-3.5 h-3.5" />
-                    Save
-                  </button>
-                  <button
-                    onClick={cancelEditing}
-                    className="flex items-center gap-1 text-xs text-zinc-400 hover:text-white px-2.5 py-1.5"
-                  >
-                    <X className="w-3.5 h-3.5" />
-                    Cancel
-                  </button>
-                </div>
-              </div>
-            ) : (
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-sm font-medium text-zinc-100">{branch.name}</p>
-                  {branch.location && (
-                    <p className="text-xs text-zinc-500 flex items-center gap-1 mt-0.5">
-                      <MapPin className="w-3 h-3" />
-                      {branch.location}
-                    </p>
-                  )}
-                  <p className="text-[10px] text-zinc-600 font-mono mt-1">{branch.branch_id}</p>
-                </div>
-                <button
-                  onClick={() => startEditing(branch)}
-                  className="p-1.5 rounded-lg bg-zinc-800/80 hover:bg-zinc-800 text-zinc-400 hover:text-white transition"
-                  title="Rename branch"
-                >
-                  <Pencil className="w-3.5 h-3.5" />
-                </button>
-              </div>
-            )}
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-};
-</file>
-
-<file path="src/pages/FixedAssetsManager.tsx">
-import React, { useMemo, useState } from 'react';
-import { useLiveQuery } from 'dexie-react-hooks';
-import { db } from '../db/kibandaDB';
-import { useAuth } from '../context/AuthContext';
-import { requestSync, deleteAssetRemote } from '../db/sync';
-import type { AssetCategory, AssetCondition, FixedAsset } from '../types';
-import { Pagination } from '../components/Pagination';
-import { usePagination } from '../components/usePagination';
-import { SearchInput } from '../components/SearchInput';
-import {
-  Boxes,
-  Plus,
-  X,
-  Trash2,
-  Pencil,
-  Check,
-  AlertTriangle,
-  Armchair,
-  UtensilsCrossed,
-  Coffee,
-  Zap,
-  Package,
-} from 'lucide-react';
-
-const money = (n: number) => `KES ${n.toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
-
-const CATEGORIES: AssetCategory[] = ['furniture', 'kitchenware', 'cutlery', 'electronics', 'other'];
-const CONDITIONS: AssetCondition[] = ['good', 'fair', 'damaged', 'lost'];
-
-const CATEGORY_ICON: Record<AssetCategory, typeof Armchair> = {
-  furniture: Armchair,
-  kitchenware: UtensilsCrossed,
-  cutlery: Coffee,
-  electronics: Zap,
-  other: Package,
-};
-
-const CONDITION_STYLE: Record<AssetCondition, string> = {
-  good: 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20',
-  fair: 'bg-amber-500/10 text-amber-400 border-amber-500/20',
-  damaged: 'bg-orange-500/10 text-orange-400 border-orange-500/20',
-  lost: 'bg-red-500/10 text-red-400 border-red-500/20',
-};
-
-export const FixedAssetsManager: React.FC = () => {
-  const { currentUser } = useAuth();
-  const myBranchId = currentUser?.branch_id ?? null;
-
-  const allAssets = useLiveQuery(() => db.fixedAssets.toArray(), []);
-  const assets = useMemo(
-    () => (allAssets ?? []).filter((a) => a.branch_id === myBranchId),
-    [allAssets, myBranchId]
-  );
-
-  const totalValue = useMemo(
-    () => assets.reduce((sum, a) => sum + a.quantity * (a.unit_cost ?? 0), 0),
-    [assets]
-  );
-  const flagged = useMemo(
-    () => assets.filter((a) => a.condition === 'damaged' || a.condition === 'lost'),
-    [assets]
-  );
-
-  // -------------------------------------------------------------------
-  // Add asset
-  // -------------------------------------------------------------------
-  const [showAddForm, setShowAddForm] = useState(false);
-  const [name, setName] = useState('');
-  const [category, setCategory] = useState<AssetCategory>('furniture');
-  const [quantity, setQuantity] = useState('');
-  const [unitCost, setUnitCost] = useState('');
-  const [condition, setCondition] = useState<AssetCondition>('good');
-  const [notes, setNotes] = useState('');
-  const [formError, setFormError] = useState('');
-
-  const resetForm = () => {
-    setName('');
-    setCategory('furniture');
-    setQuantity('');
-    setUnitCost('');
-    setCondition('good');
-    setNotes('');
-    setFormError('');
-  };
-
-  const handleAddAsset = async () => {
-    setFormError('');
-    if (!myBranchId) return setFormError('Your account has no branch assigned — contact the owner.');
-    if (!name.trim()) return setFormError('Enter an asset name.');
-    const qty = parseFloat(quantity);
-    if (isNaN(qty) || qty <= 0) return setFormError('Enter a valid quantity.');
-    const cost = unitCost.trim() ? parseFloat(unitCost) : undefined;
-    if (unitCost.trim() && (isNaN(cost as number) || (cost as number) < 0)) {
-      return setFormError('Enter a valid cost per unit, or leave it blank.');
-    }
-
-    await db.fixedAssets.add({
-      asset_id: crypto.randomUUID(),
-      branch_id: myBranchId,
-      name: name.trim(),
-      category,
-      quantity: qty,
-      unit_cost: cost,
-      condition,
-      notes: notes.trim() || undefined,
-      synced: false,
-    });
-    requestSync();
-    resetForm();
-    setShowAddForm(false);
-  };
-
-  // -------------------------------------------------------------------
-  // Edit asset — quantity, cost, condition, notes
-  // -------------------------------------------------------------------
-  const [editingAsset, setEditingAsset] = useState<FixedAsset | null>(null);
-  const [editQty, setEditQty] = useState('');
-  const [editCost, setEditCost] = useState('');
-  const [editCondition, setEditCondition] = useState<AssetCondition>('good');
-  const [editNotes, setEditNotes] = useState('');
-
-  const openEdit = (a: FixedAsset) => {
-    setEditingAsset(a);
-    setEditQty(String(a.quantity));
-    setEditCost(a.unit_cost !== undefined ? String(a.unit_cost) : '');
-    setEditCondition(a.condition);
-    setEditNotes(a.notes ?? '');
-  };
-
-  const handleSaveEdit = async () => {
-    if (!editingAsset) return;
-    const qty = parseFloat(editQty);
-    if (isNaN(qty) || qty < 0) return;
-    const cost = editCost.trim() ? parseFloat(editCost) : undefined;
-
-    await db.fixedAssets.update(editingAsset.asset_id, {
-      quantity: qty,
-      unit_cost: cost,
-      condition: editCondition,
-      notes: editNotes.trim() || undefined,
-      synced: false,
-    });
-    requestSync();
-    setEditingAsset(null);
-  };
-
-  // -------------------------------------------------------------------
-  // Delete asset
-  // -------------------------------------------------------------------
-  const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
-
-  const handleDelete = async (id: string) => {
-    await db.fixedAssets.delete(id);
-    deleteAssetRemote(id);
-    setConfirmDelete(null);
-  };
-
-  // -------------------------------------------------------------------
-  // Search + pagination
-  // -------------------------------------------------------------------
-  const [search, setSearch] = useState('');
-  const searched = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    return q ? assets.filter((a) => a.name.toLowerCase().includes(q)) : assets;
-  }, [assets, search]);
-
-  const { page, setPage, totalPages, pageItems: pagedAssets } = usePagination(searched, 6);
-
-  return (
-    <div className="space-y-5">
-      <div className="relative bg-[#0f1117] border border-zinc-800/80 rounded-2xl p-4 shadow-xl space-y-3">
-        <div className="flex items-center justify-between border-b border-zinc-800/80 pb-2">
-          <div className="flex items-center gap-2">
-            <Boxes className="w-4 h-4 text-orange-400" />
-            <span className="font-mono text-xs font-bold text-zinc-300 uppercase tracking-wider">
-              Fixed Assets
-            </span>
-          </div>
-          <button
-            onClick={() => setShowAddForm(true)}
-            className="flex items-center gap-1 text-[10px] font-mono font-bold uppercase tracking-wider text-orange-400 bg-orange-500/10 border border-orange-500/30 px-2.5 py-1.5 rounded-lg active:scale-95 transition"
-          >
-            <Plus className="w-3 h-3" /> Add
-          </button>
-        </div>
-
-        <div className="flex items-center justify-between text-[10px] font-mono text-zinc-500">
-          <span>
-            Est. Value: <span className="text-zinc-300 font-bold">{money(totalValue)}</span>
-          </span>
-          {flagged.length > 0 && (
-            <span className="flex items-center gap-1 text-red-400">
-              <AlertTriangle className="w-3 h-3" />
-              {flagged.length} damaged/lost
-            </span>
-          )}
-        </div>
-
-        <div className="space-y-2">
-          {assets.length === 0 ? (
-            <p className="text-zinc-600 text-[11px] font-mono text-center py-6">
-              No fixed assets logged yet — add tables, chairs, sufurias, cups, spoons...
-            </p>
-          ) : (
-            <>
-              <SearchInput
-                value={search}
-                onChange={(v) => {
-                  setSearch(v);
-                  setPage(1);
-                }}
-                placeholder="Search assets..."
-              />
-              {searched.length === 0 && (
-                <p className="text-zinc-600 text-[11px] font-mono text-center py-6">No assets match your search</p>
-              )}
-              {pagedAssets.map((a) => {
-                const Icon = CATEGORY_ICON[a.category];
-                const isConfirming = confirmDelete === a.asset_id;
-                return (
-                  <div
-                    key={a.asset_id}
-                    className="p-2.5 rounded-xl border bg-zinc-900/60 border-zinc-800/60"
-                  >
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-2 min-w-0">
-                        <div className="w-7 h-7 shrink-0 rounded-lg bg-zinc-800 flex items-center justify-center">
-                          <Icon className="w-3.5 h-3.5 text-zinc-400" />
-                        </div>
-                        <div className="min-w-0">
-                          <p className="text-xs font-medium text-white truncate">{a.name}</p>
-                          <p className="text-[10px] font-mono text-zinc-500">
-                            {a.quantity} unit{a.quantity !== 1 ? 's' : ''}
-                            {a.unit_cost !== undefined && ` · ${money(a.unit_cost)}/unit`}
-                          </p>
-                        </div>
-                      </div>
-                      <div className="flex items-center gap-1.5 shrink-0">
-                        <span
-                          className={`text-[9px] font-mono font-bold uppercase tracking-wider px-1.5 py-0.5 rounded border ${CONDITION_STYLE[a.condition]}`}
-                        >
-                          {a.condition}
-                        </span>
-                        <button
-                          onClick={() => openEdit(a)}
-                          title="Edit"
-                          className="p-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-300"
-                        >
-                          <Pencil className="w-3.5 h-3.5" />
-                        </button>
-                        <button
-                          onClick={() => setConfirmDelete(a.asset_id)}
-                          title="Delete"
-                          className="p-1.5 rounded-lg bg-zinc-800 hover:bg-red-500/20 text-zinc-400 hover:text-red-400"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
-                      </div>
-                    </div>
-
-                    {a.notes && <p className="text-[10px] font-mono text-zinc-600 mt-1.5">{a.notes}</p>}
-
-                    {isConfirming && (
-                      <div className="flex gap-2 mt-2 pt-2 border-t border-zinc-800/60">
-                        <button
-                          onClick={() => setConfirmDelete(null)}
-                          className="flex-1 py-1.5 bg-zinc-800 text-zinc-400 rounded-lg font-mono text-[10px] font-bold uppercase"
-                        >
-                          Cancel
-                        </button>
-                        <button
-                          onClick={() => handleDelete(a.asset_id)}
-                          className="flex-1 py-1.5 bg-red-500/20 text-red-400 border border-red-500/30 rounded-lg font-mono text-[10px] font-bold uppercase"
-                        >
-                          Confirm Delete
-                        </button>
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
-              <Pagination page={page} totalPages={totalPages} onPageChange={setPage} />
-            </>
-          )}
-        </div>
-      </div>
-
-      {/* Add Asset Modal */}
-      {showAddForm && (
-        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/70 backdrop-blur-sm p-4">
-          <div className="relative w-full max-w-sm bg-[#0f1117] border border-zinc-800 rounded-3xl p-5 shadow-2xl space-y-4 max-h-[85vh] overflow-y-auto">
-            <div className="flex items-center justify-between">
-              <h3 className="font-mono text-xs font-bold text-white uppercase tracking-wider">Add Asset</h3>
-              <button
-                onClick={() => {
-                  setShowAddForm(false);
-                  resetForm();
-                }}
-                className="p-1.5 rounded-lg bg-zinc-900 hover:bg-zinc-800 text-zinc-400 border border-zinc-800"
-              >
-                <X className="w-3.5 h-3.5" />
-              </button>
-            </div>
-
-            <div className="space-y-3">
-              <div>
-                <label className="text-[10px] font-mono text-zinc-500 uppercase tracking-widest mb-1 block">
-                  Name
-                </label>
-                <input
-                  type="text"
-                  value={name}
-                  onChange={(e) => setName(e.target.value)}
-                  placeholder="e.g. Plastic Chair, Sufuria (Large)"
-                  className="w-full bg-zinc-950 border border-zinc-700 rounded-xl px-3 py-2.5 text-xs text-white font-mono focus:outline-none focus:border-orange-500"
-                />
-              </div>
-
-              <div>
-                <label className="text-[10px] font-mono text-zinc-500 uppercase tracking-widest mb-1 block">
-                  Category
-                </label>
-                <div className="grid grid-cols-3 gap-1.5">
-                  {CATEGORIES.map((c) => (
-                    <button
-                      key={c}
-                      onClick={() => setCategory(c)}
-                      className={`py-2 text-[9px] font-mono font-bold uppercase rounded-lg border transition ${
-                        category === c
-                          ? 'bg-orange-500 text-zinc-950 border-orange-400'
-                          : 'bg-zinc-800 text-zinc-400 border-zinc-700'
-                      }`}
-                    >
-                      {c}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              <div className="grid grid-cols-2 gap-2">
-                <div>
-                  <label className="text-[10px] font-mono text-zinc-500 uppercase tracking-widest mb-1 block">
-                    Quantity
-                  </label>
-                  <input
-                    type="number"
-                    inputMode="decimal"
-                    value={quantity}
-                    onChange={(e) => setQuantity(e.target.value)}
-                    placeholder="0"
-                    className="w-full bg-zinc-950 border border-zinc-700 rounded-xl px-3 py-2.5 text-xs text-white font-mono focus:outline-none focus:border-orange-500"
-                  />
-                </div>
-                <div>
-                  <label className="text-[10px] font-mono text-zinc-500 uppercase tracking-widest mb-1 block">
-                    Cost / Unit (optional)
-                  </label>
-                  <input
-                    type="number"
-                    inputMode="decimal"
-                    value={unitCost}
-                    onChange={(e) => setUnitCost(e.target.value)}
-                    placeholder="0"
-                    className="w-full bg-zinc-950 border border-zinc-700 rounded-xl px-3 py-2.5 text-xs text-white font-mono focus:outline-none focus:border-orange-500"
-                  />
-                </div>
-              </div>
-
-              <div>
-                <label className="text-[10px] font-mono text-zinc-500 uppercase tracking-widest mb-1 block">
-                  Condition
-                </label>
-                <div className="grid grid-cols-4 gap-1.5">
-                  {CONDITIONS.map((c) => (
-                    <button
-                      key={c}
-                      onClick={() => setCondition(c)}
-                      className={`py-2 text-[9px] font-mono font-bold uppercase rounded-lg border transition ${
-                        condition === c
-                          ? 'bg-orange-500 text-zinc-950 border-orange-400'
-                          : 'bg-zinc-800 text-zinc-400 border-zinc-700'
-                      }`}
-                    >
-                      {c}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              <div>
-                <label className="text-[10px] font-mono text-zinc-500 uppercase tracking-widest mb-1 block">
-                  Notes (optional)
-                </label>
-                <textarea
-                  value={notes}
-                  onChange={(e) => setNotes(e.target.value)}
-                  placeholder="e.g. Stored in back kitchen"
-                  rows={2}
-                  className="w-full bg-zinc-950 border border-zinc-700 rounded-xl px-3 py-2.5 text-xs text-white font-mono resize-none focus:outline-none focus:border-orange-500"
-                />
-              </div>
-
-              {formError && (
-                <p className="text-[11px] font-mono text-red-400 bg-red-500/10 border border-red-500/20 rounded-lg px-3 py-2">
-                  {formError}
-                </p>
-              )}
-            </div>
-
-            <button
-              onClick={handleAddAsset}
-              className="w-full py-3.5 bg-orange-500 hover:bg-orange-400 active:scale-[0.98] text-zinc-950 font-mono font-bold uppercase tracking-wider text-xs rounded-2xl transition shadow-lg shadow-orange-500/20"
-            >
-              Add Asset
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* Edit Asset Modal */}
-      {editingAsset && (
-        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/70 backdrop-blur-sm p-4">
-          <div className="relative w-full max-w-sm bg-[#0f1117] border border-zinc-800 rounded-3xl p-5 shadow-2xl space-y-4">
-            <div className="flex items-center justify-between">
-              <h3 className="font-mono text-xs font-bold text-white uppercase tracking-wider">
-                Edit {editingAsset.name}
-              </h3>
-              <button
-                onClick={() => setEditingAsset(null)}
-                className="p-1.5 rounded-lg bg-zinc-900 hover:bg-zinc-800 text-zinc-400 border border-zinc-800"
-              >
-                <X className="w-3.5 h-3.5" />
-              </button>
-            </div>
-
-            <div className="space-y-3">
-              <div className="grid grid-cols-2 gap-2">
-                <div>
-                  <label className="text-[10px] font-mono text-zinc-500 uppercase tracking-widest mb-1 block">
-                    Quantity
-                  </label>
-                  <input
-                    type="number"
-                    inputMode="decimal"
-                    value={editQty}
-                    onChange={(e) => setEditQty(e.target.value)}
-                    className="w-full bg-zinc-950 border border-zinc-700 rounded-xl px-3 py-2.5 text-xs text-white font-mono focus:outline-none focus:border-orange-500"
-                  />
-                </div>
-                <div>
-                  <label className="text-[10px] font-mono text-zinc-500 uppercase tracking-widest mb-1 block">
-                    Cost / Unit
-                  </label>
-                  <input
-                    type="number"
-                    inputMode="decimal"
-                    value={editCost}
-                    onChange={(e) => setEditCost(e.target.value)}
-                    className="w-full bg-zinc-950 border border-zinc-700 rounded-xl px-3 py-2.5 text-xs text-white font-mono focus:outline-none focus:border-orange-500"
-                  />
-                </div>
-              </div>
-
-              <div>
-                <label className="text-[10px] font-mono text-zinc-500 uppercase tracking-widest mb-1 block">
-                  Condition
-                </label>
-                <div className="grid grid-cols-4 gap-1.5">
-                  {CONDITIONS.map((c) => (
-                    <button
-                      key={c}
-                      onClick={() => setEditCondition(c)}
-                      className={`py-2 text-[9px] font-mono font-bold uppercase rounded-lg border transition ${
-                        editCondition === c
-                          ? 'bg-orange-500 text-zinc-950 border-orange-400'
-                          : 'bg-zinc-800 text-zinc-400 border-zinc-700'
-                      }`}
-                    >
-                      {c}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              <div>
-                <label className="text-[10px] font-mono text-zinc-500 uppercase tracking-widest mb-1 block">
-                  Notes
-                </label>
-                <textarea
-                  value={editNotes}
-                  onChange={(e) => setEditNotes(e.target.value)}
-                  rows={2}
-                  className="w-full bg-zinc-950 border border-zinc-700 rounded-xl px-3 py-2.5 text-xs text-white font-mono resize-none focus:outline-none focus:border-orange-500"
-                />
-              </div>
-            </div>
-
-            <button
-              onClick={handleSaveEdit}
-              className="w-full py-3.5 bg-orange-500 hover:bg-orange-400 active:scale-[0.98] text-zinc-950 font-mono font-bold uppercase tracking-wider text-xs rounded-2xl transition shadow-lg shadow-orange-500/20"
-            >
-              <Check className="w-3.5 h-3.5 inline -mt-0.5 mr-1" /> Save Changes
-            </button>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-};
-</file>
-
-<file path="src/pages/SuperAdminDashboard.tsx">
-import React from 'react';
-import { BranchManager } from '../components/BranchManager';
-
-/**
- * SuperAdmin's home screen. Starts with just Branches — the immediate need
- * (the owner has to be able to create/name branches before anything else
- * multi-branch makes sense). Overview (combined sales/profit across
- * branches), Staff, Stock, and Payroll tabs land here next, each defaulting
- * to a branch-switcher/drill-down view except Overview, which stays combined
- * (see the multi-branch design discussion for why).
- */
-export const SuperAdminDashboard: React.FC = () => {
-  return (
-    <div className="space-y-4">
-      <BranchManager />
-    </div>
-  );
-};
-</file>
 
 <file path="dev-dist/registerSW.js">
 if('serviceWorker' in navigator) navigator.serviceWorker.register('/dev-sw.js?dev-sw', { scope: '/', type: 'classic' })
@@ -4505,6 +3761,218 @@ define(['exports'], (function (exports) { 'use strict';
 <svg xmlns="http://www.w3.org/2000/svg" width="77" height="47" fill="none" aria-labelledby="vite-logo-title" viewBox="0 0 77 47"><title id="vite-logo-title">Vite</title><style>.parenthesis{fill:#000}@media (prefers-color-scheme:dark){.parenthesis{fill:#fff}}</style><path fill="#9135ff" d="M40.151 45.71c-.663.844-2.02.374-2.02-.699V34.708a2.26 2.26 0 0 0-2.262-2.262H24.493c-.92 0-1.457-1.04-.92-1.788l7.479-10.471c1.07-1.498 0-3.578-1.842-3.578H15.443c-.92 0-1.456-1.04-.92-1.788l9.696-13.576c.213-.297.556-.474.92-.474h28.894c.92 0 1.456 1.04.92 1.788l-7.48 10.472c-1.07 1.497 0 3.578 1.842 3.578h11.376c.944 0 1.474 1.087.89 1.83L40.153 45.712z"/><mask id="a" width="48" height="47" x="14" y="0" maskUnits="userSpaceOnUse" style="mask-type:alpha"><path fill="#000" d="M40.047 45.71c-.663.843-2.02.374-2.02-.699V34.708a2.26 2.26 0 0 0-2.262-2.262H24.389c-.92 0-1.457-1.04-.92-1.788l7.479-10.472c1.07-1.497 0-3.578-1.842-3.578H15.34c-.92 0-1.456-1.04-.92-1.788l9.696-13.575c.213-.297.556-.474.92-.474H53.93c.92 0 1.456 1.04.92 1.788L47.37 13.03c-1.07 1.498 0 3.578 1.842 3.578h11.376c.944 0 1.474 1.088.89 1.831L40.049 45.712z"/></mask><g mask="url(#a)"><g filter="url(#b)"><ellipse cx="5.508" cy="14.704" fill="#eee6ff" rx="5.508" ry="14.704" transform="rotate(269.814 20.96 11.29)scale(-1 1)"/></g><g filter="url(#c)"><ellipse cx="10.399" cy="29.851" fill="#eee6ff" rx="10.399" ry="29.851" transform="rotate(89.814 -16.902 -8.275)scale(1 -1)"/></g><g filter="url(#d)"><ellipse cx="5.508" cy="30.487" fill="#8900ff" rx="5.508" ry="30.487" transform="rotate(89.814 -19.197 -7.127)scale(1 -1)"/></g><g filter="url(#e)"><ellipse cx="5.508" cy="30.599" fill="#8900ff" rx="5.508" ry="30.599" transform="rotate(89.814 -25.928 4.177)scale(1 -1)"/></g><g filter="url(#f)"><ellipse cx="5.508" cy="30.599" fill="#8900ff" rx="5.508" ry="30.599" transform="rotate(89.814 -25.738 5.52)scale(1 -1)"/></g><g filter="url(#g)"><ellipse cx="14.072" cy="22.078" fill="#eee6ff" rx="14.072" ry="22.078" transform="rotate(93.35 31.245 55.578)scale(-1 1)"/></g><g filter="url(#h)"><ellipse cx="3.47" cy="21.501" fill="#8900ff" rx="3.47" ry="21.501" transform="rotate(89.009 35.419 55.202)scale(-1 1)"/></g><g filter="url(#i)"><ellipse cx="3.47" cy="21.501" fill="#8900ff" rx="3.47" ry="21.501" transform="rotate(89.009 35.419 55.202)scale(-1 1)"/></g><g filter="url(#j)"><ellipse cx="14.592" cy="9.743" fill="#8900ff" rx="4.407" ry="29.108" transform="rotate(39.51 14.592 9.743)"/></g><g filter="url(#k)"><ellipse cx="61.728" cy="-5.321" fill="#8900ff" rx="4.407" ry="29.108" transform="rotate(37.892 61.728 -5.32)"/></g><g filter="url(#l)"><ellipse cx="55.618" cy="7.104" fill="#00c2ff" rx="5.971" ry="9.665" transform="rotate(37.892 55.618 7.104)"/></g><g filter="url(#m)"><ellipse cx="12.326" cy="39.103" fill="#8900ff" rx="4.407" ry="29.108" transform="rotate(37.892 12.326 39.103)"/></g><g filter="url(#n)"><ellipse cx="12.326" cy="39.103" fill="#8900ff" rx="4.407" ry="29.108" transform="rotate(37.892 12.326 39.103)"/></g><g filter="url(#o)"><ellipse cx="49.857" cy="30.678" fill="#8900ff" rx="4.407" ry="29.108" transform="rotate(37.892 49.857 30.678)"/></g><g filter="url(#p)"><ellipse cx="52.623" cy="33.171" fill="#00c2ff" rx="5.971" ry="15.297" transform="rotate(37.892 52.623 33.17)"/></g></g><path d="M6.919 0c-9.198 13.166-9.252 33.575 0 46.789h6.215c-9.25-13.214-9.196-33.623 0-46.789zm62.424 0h-6.215c9.198 13.166 9.252 33.575 0 46.789h6.215c9.25-13.214 9.196-33.623 0-46.789" class="parenthesis"/><defs><filter id="b" width="60.045" height="41.654" x="-5.564" y="16.92" color-interpolation-filters="sRGB" filterUnits="userSpaceOnUse"><feFlood flood-opacity="0" result="BackgroundImageFix"/><feBlend in="SourceGraphic" in2="BackgroundImageFix" result="shape"/><feGaussianBlur result="effect1_foregroundBlur_2002_17286" stdDeviation="7.659"/></filter><filter id="c" width="90.34" height="51.437" x="-40.407" y="-6.762" color-interpolation-filters="sRGB" filterUnits="userSpaceOnUse"><feFlood flood-opacity="0" result="BackgroundImageFix"/><feBlend in="SourceGraphic" in2="BackgroundImageFix" result="shape"/><feGaussianBlur result="effect1_foregroundBlur_2002_17286" stdDeviation="7.659"/></filter><filter id="d" width="79.355" height="29.4" x="-35.435" y="2.801" color-interpolation-filters="sRGB" filterUnits="userSpaceOnUse"><feFlood flood-opacity="0" result="BackgroundImageFix"/><feBlend in="SourceGraphic" in2="BackgroundImageFix" result="shape"/><feGaussianBlur result="effect1_foregroundBlur_2002_17286" stdDeviation="4.596"/></filter><filter id="e" width="79.579" height="29.4" x="-30.84" y="20.8" color-interpolation-filters="sRGB" filterUnits="userSpaceOnUse"><feFlood flood-opacity="0" result="BackgroundImageFix"/><feBlend in="SourceGraphic" in2="BackgroundImageFix" result="shape"/><feGaussianBlur result="effect1_foregroundBlur_2002_17286" stdDeviation="4.596"/></filter><filter id="f" width="79.579" height="29.4" x="-29.307" y="21.949" color-interpolation-filters="sRGB" filterUnits="userSpaceOnUse"><feFlood flood-opacity="0" result="BackgroundImageFix"/><feBlend in="SourceGraphic" in2="BackgroundImageFix" result="shape"/><feGaussianBlur result="effect1_foregroundBlur_2002_17286" stdDeviation="4.596"/></filter><filter id="g" width="74.749" height="58.852" x="29.961" y="-17.13" color-interpolation-filters="sRGB" filterUnits="userSpaceOnUse"><feFlood flood-opacity="0" result="BackgroundImageFix"/><feBlend in="SourceGraphic" in2="BackgroundImageFix" result="shape"/><feGaussianBlur result="effect1_foregroundBlur_2002_17286" stdDeviation="7.659"/></filter><filter id="h" width="61.377" height="25.362" x="37.754" y="3.055" color-interpolation-filters="sRGB" filterUnits="userSpaceOnUse"><feFlood flood-opacity="0" result="BackgroundImageFix"/><feBlend in="SourceGraphic" in2="BackgroundImageFix" result="shape"/><feGaussianBlur result="effect1_foregroundBlur_2002_17286" stdDeviation="4.596"/></filter><filter id="i" width="61.377" height="25.362" x="37.754" y="3.055" color-interpolation-filters="sRGB" filterUnits="userSpaceOnUse"><feFlood flood-opacity="0" result="BackgroundImageFix"/><feBlend in="SourceGraphic" in2="BackgroundImageFix" result="shape"/><feGaussianBlur result="effect1_foregroundBlur_2002_17286" stdDeviation="4.596"/></filter><filter id="j" width="56.045" height="63.649" x="-13.43" y="-22.082" color-interpolation-filters="sRGB" filterUnits="userSpaceOnUse"><feFlood flood-opacity="0" result="BackgroundImageFix"/><feBlend in="SourceGraphic" in2="BackgroundImageFix" result="shape"/><feGaussianBlur result="effect1_foregroundBlur_2002_17286" stdDeviation="4.596"/></filter><filter id="k" width="54.814" height="64.646" x="34.321" y="-37.644" color-interpolation-filters="sRGB" filterUnits="userSpaceOnUse"><feFlood flood-opacity="0" result="BackgroundImageFix"/><feBlend in="SourceGraphic" in2="BackgroundImageFix" result="shape"/><feGaussianBlur result="effect1_foregroundBlur_2002_17286" stdDeviation="4.596"/></filter><filter id="l" width="33.541" height="35.313" x="38.847" y="-10.552" color-interpolation-filters="sRGB" filterUnits="userSpaceOnUse"><feFlood flood-opacity="0" result="BackgroundImageFix"/><feBlend in="SourceGraphic" in2="BackgroundImageFix" result="shape"/><feGaussianBlur result="effect1_foregroundBlur_2002_17286" stdDeviation="4.596"/></filter><filter id="m" width="54.814" height="64.646" x="-15.081" y="6.78" color-interpolation-filters="sRGB" filterUnits="userSpaceOnUse"><feFlood flood-opacity="0" result="BackgroundImageFix"/><feBlend in="SourceGraphic" in2="BackgroundImageFix" result="shape"/><feGaussianBlur result="effect1_foregroundBlur_2002_17286" stdDeviation="4.596"/></filter><filter id="n" width="54.814" height="64.646" x="-15.081" y="6.78" color-interpolation-filters="sRGB" filterUnits="userSpaceOnUse"><feFlood flood-opacity="0" result="BackgroundImageFix"/><feBlend in="SourceGraphic" in2="BackgroundImageFix" result="shape"/><feGaussianBlur result="effect1_foregroundBlur_2002_17286" stdDeviation="4.596"/></filter><filter id="o" width="54.814" height="64.646" x="22.45" y="-1.645" color-interpolation-filters="sRGB" filterUnits="userSpaceOnUse"><feFlood flood-opacity="0" result="BackgroundImageFix"/><feBlend in="SourceGraphic" in2="BackgroundImageFix" result="shape"/><feGaussianBlur result="effect1_foregroundBlur_2002_17286" stdDeviation="4.596"/></filter><filter id="p" width="39.409" height="43.623" x="32.919" y="11.36" color-interpolation-filters="sRGB" filterUnits="userSpaceOnUse"><feFlood flood-opacity="0" result="BackgroundImageFix"/><feBlend in="SourceGraphic" in2="BackgroundImageFix" result="shape"/><feGaussianBlur result="effect1_foregroundBlur_2002_17286" stdDeviation="4.596"/></filter></defs></svg>
 </file>
 
+<file path="src/components/BranchManager.tsx">
+import React, { useState } from 'react';
+import { useLiveQuery } from 'dexie-react-hooks';
+import { db } from '../db/kibandaDB';
+import { requestSync } from '../db/sync';
+import type { Branch } from '../types';
+import { Building2, Plus, Pencil, Check, X, MapPin } from 'lucide-react';
+
+function slugify(name: string): string {
+  return name
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/(^-|-$)/g, '') || 'branch';
+}
+
+export const BranchManager: React.FC = () => {
+  const branches = useLiveQuery(() => db.branches.toArray(), []) ?? [];
+
+  // -------------------------------------------------------------------
+  // Add branch
+  // -------------------------------------------------------------------
+  const [showAddForm, setShowAddForm] = useState(false);
+  const [name, setName] = useState('');
+  const [location, setLocation] = useState('');
+  const [error, setError] = useState('');
+
+  const resetAddForm = () => {
+    setName('');
+    setLocation('');
+    setError('');
+  };
+
+  const handleAddBranch = async () => {
+    setError('');
+    if (!name.trim()) return setError('Enter a branch name.');
+
+    const baseId = slugify(name);
+    let branchId = baseId;
+    let suffix = 2;
+    // Guard against two branches slugifying to the same id (e.g. two
+    // branches both named "Town Centre").
+    while (branches.some((b) => b.branch_id === branchId)) {
+      branchId = `${baseId}-${suffix}`;
+      suffix += 1;
+    }
+
+    await db.branches.add({
+      branch_id: branchId,
+      name: name.trim(),
+      location: location.trim() || undefined,
+      synced: false,
+    });
+    requestSync();
+    resetAddForm();
+    setShowAddForm(false);
+  };
+
+  // -------------------------------------------------------------------
+  // Rename / edit branch
+  // -------------------------------------------------------------------
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editName, setEditName] = useState('');
+  const [editLocation, setEditLocation] = useState('');
+
+  const startEditing = (branch: Branch) => {
+    setEditingId(branch.branch_id);
+    setEditName(branch.name);
+    setEditLocation(branch.location ?? '');
+  };
+
+  const cancelEditing = () => {
+    setEditingId(null);
+    setEditName('');
+    setEditLocation('');
+  };
+
+  const saveEditing = async () => {
+    if (!editingId || !editName.trim()) return;
+    await db.branches.update(editingId, {
+      name: editName.trim(),
+      location: editLocation.trim() || undefined,
+      synced: false,
+    });
+    requestSync();
+    cancelEditing();
+  };
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <Building2 className="w-4 h-4 text-orange-400" />
+          <h2 className="text-sm font-bold text-white uppercase tracking-wider">Branches</h2>
+        </div>
+        <button
+          onClick={() => setShowAddForm((v) => !v)}
+          className="flex items-center gap-1 text-xs font-medium bg-orange-500/10 text-orange-400 border border-orange-500/20 px-2.5 py-1.5 rounded-lg hover:bg-orange-500/20 transition active:scale-95"
+        >
+          <Plus className="w-3.5 h-3.5" />
+          Add Branch
+        </button>
+      </div>
+
+      {showAddForm && (
+        <div className="bg-zinc-900/80 border border-zinc-800/80 rounded-xl p-3 space-y-2">
+          <input
+            autoFocus
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder="Branch name (e.g. Westlands Branch)"
+            className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-sm text-zinc-100 placeholder:text-zinc-600 focus:outline-none focus:border-orange-500/50"
+          />
+          <input
+            value={location}
+            onChange={(e) => setLocation(e.target.value)}
+            placeholder="Location (optional)"
+            className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-sm text-zinc-100 placeholder:text-zinc-600 focus:outline-none focus:border-orange-500/50"
+          />
+          {error && <p className="text-xs text-red-400">{error}</p>}
+          <div className="flex gap-2 pt-1">
+            <button
+              onClick={handleAddBranch}
+              className="flex-1 bg-orange-500 text-white text-xs font-bold py-2 rounded-lg hover:bg-orange-400 transition active:scale-95"
+            >
+              Save Branch
+            </button>
+            <button
+              onClick={() => {
+                resetAddForm();
+                setShowAddForm(false);
+              }}
+              className="px-3 text-xs text-zinc-400 hover:text-white"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+
+      <div className="space-y-2">
+        {branches.length === 0 && (
+          <p className="text-xs text-zinc-500 text-center py-6">
+            No branches yet — add your first one above.
+          </p>
+        )}
+
+        {branches.map((branch) => (
+          <div
+            key={branch.branch_id}
+            className="bg-zinc-900/80 border border-zinc-800/80 rounded-xl p-3"
+          >
+            {editingId === branch.branch_id ? (
+              <div className="space-y-2">
+                <input
+                  autoFocus
+                  value={editName}
+                  onChange={(e) => setEditName(e.target.value)}
+                  className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-sm text-zinc-100 focus:outline-none focus:border-orange-500/50"
+                />
+                <input
+                  value={editLocation}
+                  onChange={(e) => setEditLocation(e.target.value)}
+                  placeholder="Location (optional)"
+                  className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-sm text-zinc-100 placeholder:text-zinc-600 focus:outline-none focus:border-orange-500/50"
+                />
+                <div className="flex gap-2">
+                  <button
+                    onClick={saveEditing}
+                    className="flex items-center gap-1 text-xs font-bold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 px-2.5 py-1.5 rounded-lg hover:bg-emerald-500/20 transition"
+                  >
+                    <Check className="w-3.5 h-3.5" />
+                    Save
+                  </button>
+                  <button
+                    onClick={cancelEditing}
+                    className="flex items-center gap-1 text-xs text-zinc-400 hover:text-white px-2.5 py-1.5"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm font-medium text-zinc-100">{branch.name}</p>
+                  {branch.location && (
+                    <p className="text-xs text-zinc-500 flex items-center gap-1 mt-0.5">
+                      <MapPin className="w-3 h-3" />
+                      {branch.location}
+                    </p>
+                  )}
+                  <p className="text-[10px] text-zinc-600 font-mono mt-1">{branch.branch_id}</p>
+                </div>
+                <button
+                  onClick={() => startEditing(branch)}
+                  className="p-1.5 rounded-lg bg-zinc-800/80 hover:bg-zinc-800 text-zinc-400 hover:text-white transition"
+                  title="Rename branch"
+                >
+                  <Pencil className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+};
+</file>
+
 <file path="src/components/Pagination.tsx">
 import React from 'react';
 import { ChevronLeft, ChevronRight } from 'lucide-react';
@@ -4629,57 +4097,39 @@ export function usePagination<T>(items: T[], pageSize = 5) {
 }
 </file>
 
-<file path="src/context/AuthContext.tsx">
-import React, { createContext, useContext, useState, useEffect } from 'react';
-import type { User } from '../types';
-import { db } from '../db/kibandaDB';
+<file path="src/context/BranchScopeContext.tsx">
+import React, { createContext, useContext } from 'react';
+import { useAuth } from './AuthContext';
 
-interface AuthContextType {
-  currentUser: User | null;
-  loginWithPin: (pin: string) => Promise<boolean>;
-  logout: () => void;
-}
+/**
+ * Every role except superadmin is permanently scoped to `currentUser.branch_id`.
+ * Superadmin has no home branch (branch_id is null) but needs to operate the
+ * *same* branch-scoped screens (AdminDashboard, StockMenuManager,
+ * FixedAssetsManager) against a branch they pick at runtime.
+ *
+ * This context carries that "which branch am I acting on" override. When no
+ * provider is present (the normal case — waiter/cook/admin), useActiveBranchId
+ * falls back to the logged-in user's own branch_id, so existing behavior for
+ * every non-superadmin role is unchanged.
+ */
+const BranchScopeContext = createContext<string | null | undefined>(undefined);
 
-const AuthContext = createContext<AuthContextType | undefined>(undefined);
+export const BranchScopeProvider: React.FC<{
+  branchId: string | null;
+  children: React.ReactNode;
+}> = ({ branchId, children }) => (
+  <BranchScopeContext.Provider value={branchId}>{children}</BranchScopeContext.Provider>
+);
 
-export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [currentUser, setCurrentUser] = useState<User | null>(() => {
-    const saved = localStorage.getItem('garomax_active_user');
-    return saved ? JSON.parse(saved) : null;
-  });
-
-  useEffect(() => {
-    if (currentUser) {
-      localStorage.setItem('garomax_active_user', JSON.stringify(currentUser));
-    } else {
-      localStorage.removeItem('garomax_active_user');
-    }
-  }, [currentUser]);
-
-  const loginWithPin = async (pin: string): Promise<boolean> => {
-    const user = await db.users.where('pin_code').equals(pin).first();
-    if (user) {
-      setCurrentUser(user);
-      return true;
-    }
-    return false;
-  };
-
-  const logout = () => {
-    setCurrentUser(null);
-  };
-
-  return (
-    <AuthContext.Provider value={{ currentUser, loginWithPin, logout }}>
-      {children}
-    </AuthContext.Provider>
-  );
-};
-
-export const useAuth = () => {
-  const context = useContext(AuthContext);
-  if (!context) throw new Error('useAuth must be used within an AuthProvider');
-  return context;
+/**
+ * Returns the branch id that branch-scoped screens should read and write
+ * against right now: the override from BranchScopeProvider if one is in
+ * scope, otherwise the current user's own branch_id.
+ */
+export const useActiveBranchId = (): string | null => {
+  const { currentUser } = useAuth();
+  const override = useContext(BranchScopeContext);
+  return override !== undefined ? override : currentUser?.branch_id ?? null;
 };
 </file>
 
@@ -4722,6 +4172,616 @@ export const supabase = createClient(
   supabaseUrl || 'https://placeholder.supabase.co',
   supabaseAnonKey || 'placeholder-anon-key'
 );
+</file>
+
+<file path="src/pages/FixedAssetsManager.tsx">
+import React, { useMemo, useState } from 'react';
+import { useLiveQuery } from 'dexie-react-hooks';
+import { db } from '../db/kibandaDB';
+import { useActiveBranchId } from '../context/BranchScopeContext';
+import { requestSync, deleteAssetRemote } from '../db/sync';
+import type { AssetCategory, AssetCondition, FixedAsset } from '../types';
+import { Pagination } from '../components/Pagination';
+import { usePagination } from '../components/usePagination';
+import { SearchInput } from '../components/SearchInput';
+import {
+  Boxes,
+  Plus,
+  X,
+  Trash2,
+  Pencil,
+  Check,
+  AlertTriangle,
+  Armchair,
+  UtensilsCrossed,
+  Coffee,
+  Zap,
+  Package,
+} from 'lucide-react';
+
+const money = (n: number) => `KES ${n.toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
+
+const CATEGORIES: AssetCategory[] = ['furniture', 'kitchenware', 'cutlery', 'electronics', 'other'];
+const CONDITIONS: AssetCondition[] = ['good', 'fair', 'damaged', 'lost'];
+
+const CATEGORY_ICON: Record<AssetCategory, typeof Armchair> = {
+  furniture: Armchair,
+  kitchenware: UtensilsCrossed,
+  cutlery: Coffee,
+  electronics: Zap,
+  other: Package,
+};
+
+const CONDITION_STYLE: Record<AssetCondition, string> = {
+  good: 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20',
+  fair: 'bg-amber-500/10 text-amber-400 border-amber-500/20',
+  damaged: 'bg-orange-500/10 text-orange-400 border-orange-500/20',
+  lost: 'bg-red-500/10 text-red-400 border-red-500/20',
+};
+
+export const FixedAssetsManager: React.FC = () => {
+  const myBranchId = useActiveBranchId();
+
+  const allAssets = useLiveQuery(() => db.fixedAssets.toArray(), []);
+  const assets = useMemo(
+    () => (allAssets ?? []).filter((a) => a.branch_id === myBranchId),
+    [allAssets, myBranchId]
+  );
+
+  const totalValue = useMemo(
+    () => assets.reduce((sum, a) => sum + a.quantity * (a.unit_cost ?? 0), 0),
+    [assets]
+  );
+  const flagged = useMemo(
+    () => assets.filter((a) => a.condition === 'damaged' || a.condition === 'lost'),
+    [assets]
+  );
+
+  // -------------------------------------------------------------------
+  // Add asset
+  // -------------------------------------------------------------------
+  const [showAddForm, setShowAddForm] = useState(false);
+  const [name, setName] = useState('');
+  const [category, setCategory] = useState<AssetCategory>('furniture');
+  const [quantity, setQuantity] = useState('');
+  const [unitCost, setUnitCost] = useState('');
+  const [condition, setCondition] = useState<AssetCondition>('good');
+  const [notes, setNotes] = useState('');
+  const [formError, setFormError] = useState('');
+
+  const resetForm = () => {
+    setName('');
+    setCategory('furniture');
+    setQuantity('');
+    setUnitCost('');
+    setCondition('good');
+    setNotes('');
+    setFormError('');
+  };
+
+  const handleAddAsset = async () => {
+    setFormError('');
+    if (!myBranchId) return setFormError('Your account has no branch assigned — contact the owner.');
+    if (!name.trim()) return setFormError('Enter an asset name.');
+    const qty = parseFloat(quantity);
+    if (isNaN(qty) || qty <= 0) return setFormError('Enter a valid quantity.');
+    const cost = unitCost.trim() ? parseFloat(unitCost) : undefined;
+    if (unitCost.trim() && (isNaN(cost as number) || (cost as number) < 0)) {
+      return setFormError('Enter a valid cost per unit, or leave it blank.');
+    }
+
+    await db.fixedAssets.add({
+      asset_id: crypto.randomUUID(),
+      branch_id: myBranchId,
+      name: name.trim(),
+      category,
+      quantity: qty,
+      unit_cost: cost,
+      condition,
+      notes: notes.trim() || undefined,
+      synced: false,
+    });
+    requestSync();
+    resetForm();
+    setShowAddForm(false);
+  };
+
+  // -------------------------------------------------------------------
+  // Edit asset — quantity, cost, condition, notes
+  // -------------------------------------------------------------------
+  const [editingAsset, setEditingAsset] = useState<FixedAsset | null>(null);
+  const [editQty, setEditQty] = useState('');
+  const [editCost, setEditCost] = useState('');
+  const [editCondition, setEditCondition] = useState<AssetCondition>('good');
+  const [editNotes, setEditNotes] = useState('');
+
+  const openEdit = (a: FixedAsset) => {
+    setEditingAsset(a);
+    setEditQty(String(a.quantity));
+    setEditCost(a.unit_cost !== undefined ? String(a.unit_cost) : '');
+    setEditCondition(a.condition);
+    setEditNotes(a.notes ?? '');
+  };
+
+  const handleSaveEdit = async () => {
+    if (!editingAsset) return;
+    const qty = parseFloat(editQty);
+    if (isNaN(qty) || qty < 0) return;
+    const cost = editCost.trim() ? parseFloat(editCost) : undefined;
+
+    await db.fixedAssets.update(editingAsset.asset_id, {
+      quantity: qty,
+      unit_cost: cost,
+      condition: editCondition,
+      notes: editNotes.trim() || undefined,
+      synced: false,
+    });
+    requestSync();
+    setEditingAsset(null);
+  };
+
+  // -------------------------------------------------------------------
+  // Delete asset
+  // -------------------------------------------------------------------
+  const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
+
+  const handleDelete = async (id: string) => {
+    await db.fixedAssets.delete(id);
+    deleteAssetRemote(id);
+    setConfirmDelete(null);
+  };
+
+  // -------------------------------------------------------------------
+  // Search + pagination
+  // -------------------------------------------------------------------
+  const [search, setSearch] = useState('');
+  const searched = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return q ? assets.filter((a) => a.name.toLowerCase().includes(q)) : assets;
+  }, [assets, search]);
+
+  const { page, setPage, totalPages, pageItems: pagedAssets } = usePagination(searched, 6);
+
+  return (
+    <div className="space-y-5">
+      <div className="relative bg-[#0f1117] border border-zinc-800/80 rounded-2xl p-4 shadow-xl space-y-3">
+        <div className="flex items-center justify-between border-b border-zinc-800/80 pb-2">
+          <div className="flex items-center gap-2">
+            <Boxes className="w-4 h-4 text-orange-400" />
+            <span className="font-mono text-xs font-bold text-zinc-300 uppercase tracking-wider">
+              Fixed Assets
+            </span>
+          </div>
+          <button
+            onClick={() => setShowAddForm(true)}
+            className="flex items-center gap-1 text-[10px] font-mono font-bold uppercase tracking-wider text-orange-400 bg-orange-500/10 border border-orange-500/30 px-2.5 py-1.5 rounded-lg active:scale-95 transition"
+          >
+            <Plus className="w-3 h-3" /> Add
+          </button>
+        </div>
+
+        <div className="flex items-center justify-between text-[10px] font-mono text-zinc-500">
+          <span>
+            Est. Value: <span className="text-zinc-300 font-bold">{money(totalValue)}</span>
+          </span>
+          {flagged.length > 0 && (
+            <span className="flex items-center gap-1 text-red-400">
+              <AlertTriangle className="w-3 h-3" />
+              {flagged.length} damaged/lost
+            </span>
+          )}
+        </div>
+
+        <div className="space-y-2">
+          {assets.length === 0 ? (
+            <p className="text-zinc-600 text-[11px] font-mono text-center py-6">
+              No fixed assets logged yet — add tables, chairs, sufurias, cups, spoons...
+            </p>
+          ) : (
+            <>
+              <SearchInput
+                value={search}
+                onChange={(v) => {
+                  setSearch(v);
+                  setPage(1);
+                }}
+                placeholder="Search assets..."
+              />
+              {searched.length === 0 && (
+                <p className="text-zinc-600 text-[11px] font-mono text-center py-6">No assets match your search</p>
+              )}
+              {pagedAssets.map((a) => {
+                const Icon = CATEGORY_ICON[a.category];
+                const isConfirming = confirmDelete === a.asset_id;
+                return (
+                  <div
+                    key={a.asset_id}
+                    className="p-2.5 rounded-xl border bg-zinc-900/60 border-zinc-800/60"
+                  >
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2 min-w-0">
+                        <div className="w-7 h-7 shrink-0 rounded-lg bg-zinc-800 flex items-center justify-center">
+                          <Icon className="w-3.5 h-3.5 text-zinc-400" />
+                        </div>
+                        <div className="min-w-0">
+                          <p className="text-xs font-medium text-white truncate">{a.name}</p>
+                          <p className="text-[10px] font-mono text-zinc-500">
+                            {a.quantity} unit{a.quantity !== 1 ? 's' : ''}
+                            {a.unit_cost !== undefined && ` · ${money(a.unit_cost)}/unit`}
+                          </p>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        <span
+                          className={`text-[9px] font-mono font-bold uppercase tracking-wider px-1.5 py-0.5 rounded border ${CONDITION_STYLE[a.condition]}`}
+                        >
+                          {a.condition}
+                        </span>
+                        <button
+                          onClick={() => openEdit(a)}
+                          title="Edit"
+                          className="p-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-300"
+                        >
+                          <Pencil className="w-3.5 h-3.5" />
+                        </button>
+                        <button
+                          onClick={() => setConfirmDelete(a.asset_id)}
+                          title="Delete"
+                          className="p-1.5 rounded-lg bg-zinc-800 hover:bg-red-500/20 text-zinc-400 hover:text-red-400"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    </div>
+
+                    {a.notes && <p className="text-[10px] font-mono text-zinc-600 mt-1.5">{a.notes}</p>}
+
+                    {isConfirming && (
+                      <div className="flex gap-2 mt-2 pt-2 border-t border-zinc-800/60">
+                        <button
+                          onClick={() => setConfirmDelete(null)}
+                          className="flex-1 py-1.5 bg-zinc-800 text-zinc-400 rounded-lg font-mono text-[10px] font-bold uppercase"
+                        >
+                          Cancel
+                        </button>
+                        <button
+                          onClick={() => handleDelete(a.asset_id)}
+                          className="flex-1 py-1.5 bg-red-500/20 text-red-400 border border-red-500/30 rounded-lg font-mono text-[10px] font-bold uppercase"
+                        >
+                          Confirm Delete
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+              <Pagination page={page} totalPages={totalPages} onPageChange={setPage} />
+            </>
+          )}
+        </div>
+      </div>
+
+      {/* Add Asset Modal */}
+      {showAddForm && (
+        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/70 backdrop-blur-sm p-4">
+          <div className="relative w-full max-w-sm bg-[#0f1117] border border-zinc-800 rounded-3xl p-5 shadow-2xl space-y-4 max-h-[85vh] overflow-y-auto">
+            <div className="flex items-center justify-between">
+              <h3 className="font-mono text-xs font-bold text-white uppercase tracking-wider">Add Asset</h3>
+              <button
+                onClick={() => {
+                  setShowAddForm(false);
+                  resetForm();
+                }}
+                className="p-1.5 rounded-lg bg-zinc-900 hover:bg-zinc-800 text-zinc-400 border border-zinc-800"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
+
+            <div className="space-y-3">
+              <div>
+                <label className="text-[10px] font-mono text-zinc-500 uppercase tracking-widest mb-1 block">
+                  Name
+                </label>
+                <input
+                  type="text"
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  placeholder="e.g. Plastic Chair, Sufuria (Large)"
+                  className="w-full bg-zinc-950 border border-zinc-700 rounded-xl px-3 py-2.5 text-xs text-white font-mono focus:outline-none focus:border-orange-500"
+                />
+              </div>
+
+              <div>
+                <label className="text-[10px] font-mono text-zinc-500 uppercase tracking-widest mb-1 block">
+                  Category
+                </label>
+                <div className="grid grid-cols-3 gap-1.5">
+                  {CATEGORIES.map((c) => (
+                    <button
+                      key={c}
+                      onClick={() => setCategory(c)}
+                      className={`py-2 text-[9px] font-mono font-bold uppercase rounded-lg border transition ${
+                        category === c
+                          ? 'bg-orange-500 text-zinc-950 border-orange-400'
+                          : 'bg-zinc-800 text-zinc-400 border-zinc-700'
+                      }`}
+                    >
+                      {c}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="text-[10px] font-mono text-zinc-500 uppercase tracking-widest mb-1 block">
+                    Quantity
+                  </label>
+                  <input
+                    type="number"
+                    inputMode="decimal"
+                    value={quantity}
+                    onChange={(e) => setQuantity(e.target.value)}
+                    placeholder="0"
+                    className="w-full bg-zinc-950 border border-zinc-700 rounded-xl px-3 py-2.5 text-xs text-white font-mono focus:outline-none focus:border-orange-500"
+                  />
+                </div>
+                <div>
+                  <label className="text-[10px] font-mono text-zinc-500 uppercase tracking-widest mb-1 block">
+                    Cost / Unit (optional)
+                  </label>
+                  <input
+                    type="number"
+                    inputMode="decimal"
+                    value={unitCost}
+                    onChange={(e) => setUnitCost(e.target.value)}
+                    placeholder="0"
+                    className="w-full bg-zinc-950 border border-zinc-700 rounded-xl px-3 py-2.5 text-xs text-white font-mono focus:outline-none focus:border-orange-500"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="text-[10px] font-mono text-zinc-500 uppercase tracking-widest mb-1 block">
+                  Condition
+                </label>
+                <div className="grid grid-cols-4 gap-1.5">
+                  {CONDITIONS.map((c) => (
+                    <button
+                      key={c}
+                      onClick={() => setCondition(c)}
+                      className={`py-2 text-[9px] font-mono font-bold uppercase rounded-lg border transition ${
+                        condition === c
+                          ? 'bg-orange-500 text-zinc-950 border-orange-400'
+                          : 'bg-zinc-800 text-zinc-400 border-zinc-700'
+                      }`}
+                    >
+                      {c}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div>
+                <label className="text-[10px] font-mono text-zinc-500 uppercase tracking-widest mb-1 block">
+                  Notes (optional)
+                </label>
+                <textarea
+                  value={notes}
+                  onChange={(e) => setNotes(e.target.value)}
+                  placeholder="e.g. Stored in back kitchen"
+                  rows={2}
+                  className="w-full bg-zinc-950 border border-zinc-700 rounded-xl px-3 py-2.5 text-xs text-white font-mono resize-none focus:outline-none focus:border-orange-500"
+                />
+              </div>
+
+              {formError && (
+                <p className="text-[11px] font-mono text-red-400 bg-red-500/10 border border-red-500/20 rounded-lg px-3 py-2">
+                  {formError}
+                </p>
+              )}
+            </div>
+
+            <button
+              onClick={handleAddAsset}
+              className="w-full py-3.5 bg-orange-500 hover:bg-orange-400 active:scale-[0.98] text-zinc-950 font-mono font-bold uppercase tracking-wider text-xs rounded-2xl transition shadow-lg shadow-orange-500/20"
+            >
+              Add Asset
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Edit Asset Modal */}
+      {editingAsset && (
+        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/70 backdrop-blur-sm p-4">
+          <div className="relative w-full max-w-sm bg-[#0f1117] border border-zinc-800 rounded-3xl p-5 shadow-2xl space-y-4">
+            <div className="flex items-center justify-between">
+              <h3 className="font-mono text-xs font-bold text-white uppercase tracking-wider">
+                Edit {editingAsset.name}
+              </h3>
+              <button
+                onClick={() => setEditingAsset(null)}
+                className="p-1.5 rounded-lg bg-zinc-900 hover:bg-zinc-800 text-zinc-400 border border-zinc-800"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
+
+            <div className="space-y-3">
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="text-[10px] font-mono text-zinc-500 uppercase tracking-widest mb-1 block">
+                    Quantity
+                  </label>
+                  <input
+                    type="number"
+                    inputMode="decimal"
+                    value={editQty}
+                    onChange={(e) => setEditQty(e.target.value)}
+                    className="w-full bg-zinc-950 border border-zinc-700 rounded-xl px-3 py-2.5 text-xs text-white font-mono focus:outline-none focus:border-orange-500"
+                  />
+                </div>
+                <div>
+                  <label className="text-[10px] font-mono text-zinc-500 uppercase tracking-widest mb-1 block">
+                    Cost / Unit
+                  </label>
+                  <input
+                    type="number"
+                    inputMode="decimal"
+                    value={editCost}
+                    onChange={(e) => setEditCost(e.target.value)}
+                    className="w-full bg-zinc-950 border border-zinc-700 rounded-xl px-3 py-2.5 text-xs text-white font-mono focus:outline-none focus:border-orange-500"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="text-[10px] font-mono text-zinc-500 uppercase tracking-widest mb-1 block">
+                  Condition
+                </label>
+                <div className="grid grid-cols-4 gap-1.5">
+                  {CONDITIONS.map((c) => (
+                    <button
+                      key={c}
+                      onClick={() => setEditCondition(c)}
+                      className={`py-2 text-[9px] font-mono font-bold uppercase rounded-lg border transition ${
+                        editCondition === c
+                          ? 'bg-orange-500 text-zinc-950 border-orange-400'
+                          : 'bg-zinc-800 text-zinc-400 border-zinc-700'
+                      }`}
+                    >
+                      {c}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div>
+                <label className="text-[10px] font-mono text-zinc-500 uppercase tracking-widest mb-1 block">
+                  Notes
+                </label>
+                <textarea
+                  value={editNotes}
+                  onChange={(e) => setEditNotes(e.target.value)}
+                  rows={2}
+                  className="w-full bg-zinc-950 border border-zinc-700 rounded-xl px-3 py-2.5 text-xs text-white font-mono resize-none focus:outline-none focus:border-orange-500"
+                />
+              </div>
+            </div>
+
+            <button
+              onClick={handleSaveEdit}
+              className="w-full py-3.5 bg-orange-500 hover:bg-orange-400 active:scale-[0.98] text-zinc-950 font-mono font-bold uppercase tracking-wider text-xs rounded-2xl transition shadow-lg shadow-orange-500/20"
+            >
+              <Check className="w-3.5 h-3.5 inline -mt-0.5 mr-1" /> Save Changes
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+</file>
+
+<file path="src/pages/SuperAdminDashboard.tsx">
+import React, { useState } from 'react';
+import { useLiveQuery } from 'dexie-react-hooks';
+import { db } from '../db/kibandaDB';
+import { BranchManager } from '../components/BranchManager';
+import { AdminDashboard } from './AdminDashboard';
+import { BranchScopeProvider } from '../context/BranchScopeContext';
+import { Building2, LayoutGrid, ChevronDown } from 'lucide-react';
+
+type SuperAdminSection = 'branches' | 'manage';
+
+/**
+ * SuperAdmin's home screen. Branches (create/rename branches) stays its own
+ * section. Manage Branch lets the owner pick any branch and drop straight
+ * into the same AdminDashboard an admin at that branch would see — same
+ * Overview/Stock/Assets/Staff/Money tabs, same create/edit/delete actions —
+ * scoped to whichever branch is selected instead of a fixed branch_id.
+ */
+export const SuperAdminDashboard: React.FC = () => {
+  const branches = useLiveQuery(() => db.branches.toArray(), []) ?? [];
+  const [section, setSection] = useState<SuperAdminSection>('branches');
+  const [selectedBranchId, setSelectedBranchId] = useState<string>('');
+
+  const SECTIONS: { id: SuperAdminSection; label: string; icon: typeof Building2 }[] = [
+    { id: 'branches', label: 'Branches', icon: Building2 },
+    { id: 'manage', label: 'Manage Branch', icon: LayoutGrid },
+  ];
+
+  return (
+    <div className="space-y-4">
+      {/* ===================== SECTION SWITCHER ===================== */}
+      <div className="grid grid-cols-2 gap-2 bg-[#0f1117] border border-zinc-800/80 rounded-2xl p-1.5">
+        {SECTIONS.map((s) => {
+          const Icon = s.icon;
+          const isActive = section === s.id;
+          return (
+            <button
+              key={s.id}
+              onClick={() => setSection(s.id)}
+              className={`flex items-center justify-center gap-1.5 py-2 rounded-xl text-[11px] font-mono font-bold uppercase tracking-wider transition ${
+                isActive
+                  ? 'bg-orange-500 text-zinc-950'
+                  : 'text-zinc-400 hover:text-zinc-200'
+              }`}
+            >
+              <Icon className="w-3.5 h-3.5" />
+              {s.label}
+            </button>
+          );
+        })}
+      </div>
+
+      {/* ===================== BRANCHES ===================== */}
+      {section === 'branches' && <BranchManager />}
+
+      {/* ===================== MANAGE BRANCH ===================== */}
+      {section === 'manage' && (
+        <div className="space-y-4">
+          <div className="relative">
+            <label className="text-[10px] font-mono text-zinc-500 uppercase tracking-widest mb-1 block">
+              Branch
+            </label>
+            <div className="relative">
+              <select
+                value={selectedBranchId}
+                onChange={(e) => setSelectedBranchId(e.target.value)}
+                className="w-full appearance-none bg-zinc-950 border border-zinc-700 rounded-xl px-3 py-2.5 text-sm text-white font-mono focus:outline-none focus:border-orange-500"
+              >
+                <option value="">Select a branch...</option>
+                {branches.map((b) => (
+                  <option key={b.branch_id} value={b.branch_id}>
+                    {b.name}
+                  </option>
+                ))}
+              </select>
+              <ChevronDown className="w-4 h-4 text-zinc-500 absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+            </div>
+          </div>
+
+          {!selectedBranchId && (
+            <div className="text-center py-10 text-zinc-500 text-xs font-mono">
+              {branches.length === 0
+                ? 'Create a branch first, then come back here to manage it.'
+                : 'Pick a branch above to manage its stock, staff, and money.'}
+            </div>
+          )}
+
+          {selectedBranchId && (
+            <BranchScopeProvider branchId={selectedBranchId}>
+              <AdminDashboard />
+            </BranchScopeProvider>
+          )}
+        </div>
+      )}
+    </div>
+  );
+};
 </file>
 
 <file path="src/App.css">
@@ -5156,6 +5216,70 @@ export default defineConfig([
 </svg>
 </file>
 
+<file path="src/context/AuthContext.tsx">
+import React, { createContext, useContext, useState, useEffect } from 'react';
+import type { User } from '../types';
+import { db } from '../db/kibandaDB';
+import { requestSync } from '../db/sync';
+
+interface AuthContextType {
+  currentUser: User | null;
+  loginWithPin: (pin: string) => Promise<boolean>;
+  logout: () => void;
+  updateOwnName: (name: string) => Promise<void>;
+}
+
+const AuthContext = createContext<AuthContextType | undefined>(undefined);
+
+export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  const [currentUser, setCurrentUser] = useState<User | null>(() => {
+    const saved = localStorage.getItem('garomax_active_user');
+    return saved ? JSON.parse(saved) : null;
+  });
+
+  useEffect(() => {
+    if (currentUser) {
+      localStorage.setItem('garomax_active_user', JSON.stringify(currentUser));
+    } else {
+      localStorage.removeItem('garomax_active_user');
+    }
+  }, [currentUser]);
+
+  const loginWithPin = async (pin: string): Promise<boolean> => {
+    const user = await db.users.where('pin_code').equals(pin).first();
+    if (user) {
+      setCurrentUser(user);
+      return true;
+    }
+    return false;
+  };
+
+  const logout = () => {
+    setCurrentUser(null);
+  };
+
+  const updateOwnName = async (name: string) => {
+    const trimmed = name.trim();
+    if (!currentUser || !trimmed) return;
+    await db.users.update(currentUser.user_id, { name: trimmed, synced: false });
+    requestSync();
+    setCurrentUser({ ...currentUser, name: trimmed });
+  };
+
+  return (
+    <AuthContext.Provider value={{ currentUser, loginWithPin, logout, updateOwnName }}>
+      {children}
+    </AuthContext.Provider>
+  );
+};
+
+export const useAuth = () => {
+  const context = useContext(AuthContext);
+  if (!context) throw new Error('useAuth must be used within an AuthProvider');
+  return context;
+};
+</file>
+
 <file path="src/pages/Login.tsx">
 import React, { useState } from 'react';
 import { useAuth } from '../context/AuthContext';
@@ -5434,14 +5558,97 @@ export default defineConfig([
 ```
 </file>
 
+<file path="index.html">
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="./public/favicon.svg" />
+    <link rel="apple-touch-icon" href="/pwa-192x192.png" />
+    <meta name="theme-color" content="#0f1117" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <title>Garomax Bites</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
+</file>
+
+<file path="vite.config.ts">
+import { defineConfig } from 'vite';
+import react from '@vitejs/plugin-react';
+import tailwindcss from '@tailwindcss/vite';
+import { VitePWA } from 'vite-plugin-pwa';
+
+// https://vite.dev/config/
+export default defineConfig({
+  plugins: [
+    react(),
+    tailwindcss(),
+    VitePWA({
+      registerType: 'autoUpdate',
+      includeAssets: ['favicon.svg'],
+      manifest: {
+        name: 'Garomax Bites',
+        short_name: 'Garomax',
+        description: 'Restaurant stock and sales management — works offline.',
+        theme_color: '#090a0f',
+        background_color: '#090a0f',
+        display: 'standalone',
+        start_url: '/',
+        icons: [
+          { src: '/icons/icon-192.png', sizes: '192x192', type: 'image/png', purpose: 'any' },
+          { src: '/icons/icon-512.png', sizes: '512x512', type: 'image/png', purpose: 'any' },
+          { src: '/icons/icon-maskable-192.png', sizes: '192x192', type: 'image/png', purpose: 'maskable' },
+          { src: '/icons/icon-maskable-512.png', sizes: '512x512', type: 'image/png', purpose: 'maskable' },
+        ],
+      },
+      workbox: {
+        // Precache the built app shell (JS/CSS/HTML/icons) so the app itself
+        // opens with zero connectivity. Order data (Dexie/IndexedDB) is
+        // already local-first and handled separately from this cache.
+        globPatterns: ['**/*.{js,css,html,svg,png,ico}'],
+        // Supabase calls should never be served from a stale cache — always
+        // hit the network (or fail fast) so sync state never lies to the user.
+        runtimeCaching: [
+          {
+            urlPattern: ({ url }) => url.hostname.endsWith('.supabase.co'),
+            handler: 'NetworkOnly',
+          },
+        ],
+      },
+    }),
+  ],
+  server:{
+    host:true,
+    port:5173,
+    strictPort: true,
+    allowedHosts: true,
+  }
+});
+</file>
+
 <file path="src/pages/KitchenDisplay.tsx">
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db } from '../db/kibandaDB';
 import { requestSync } from '../db/sync';
 import { useAuth } from '../context/AuthContext';
 import { Check, Flame, Package, AlertTriangle, X } from 'lucide-react';
-import type { OrderItem, WasteReason } from '../types';
+import type { Ingredient, OrderItem, WasteReason } from '../types';
+
+// A branch's view of a shared ingredient: identity fields from `Ingredient`
+// joined with this branch's own quantity/cost/threshold from `IngredientStock`
+// (see StockMenuManager.tsx for the same join).
+type StockedIngredient = Ingredient & {
+  quantity_on_hand: number;
+  last_purchase_cost: number;
+  low_stock_threshold: number;
+};
 
 const WASTE_REASONS: { value: WasteReason; label: string; target: 'dish' | 'ingredient' }[] = [
   { value: 'burnt_overcooked', label: 'Burnt / Overcooked', target: 'dish' },
@@ -5452,15 +5659,36 @@ const WASTE_REASONS: { value: WasteReason; label: string; target: 'dish' | 'ingr
 export const KitchenDisplay: React.FC = () => {
   const { currentUser } = useAuth();
 
+  const myBranchId = currentUser?.branch_id ?? null;
+
   // Live query the kitchen queue by prep status — independent of whether the
   // waiter has collected payment yet. A ticket can be "ready" and still unpaid.
-  const orders = useLiveQuery(
+  const allQueuedOrders = useLiveQuery(
     () => db.orders.where('kitchen_status').equals('queued').reverse().toArray(),
     []
   );
+  const orders = allQueuedOrders?.filter((o) => o.branch_id === myBranchId);
 
-  const ingredients = useLiveQuery(() => db.ingredients.toArray(), []);
+  const ingredientDefs = useLiveQuery(() => db.ingredients.toArray(), []);
+  const allIngredientStock = useLiveQuery(() => db.ingredientStock.toArray(), []);
   const recipes = useLiveQuery(() => db.recipes.toArray(), []);
+
+  const ingredients: StockedIngredient[] = useMemo(() => {
+    const defMap = new Map((ingredientDefs ?? []).map((i) => [i.ingredient_id, i]));
+    return (allIngredientStock ?? [])
+      .filter((s) => s.branch_id === myBranchId)
+      .map((s) => {
+        const def = defMap.get(s.ingredient_id);
+        if (!def) return null;
+        return {
+          ...def,
+          quantity_on_hand: s.quantity_on_hand,
+          last_purchase_cost: s.last_purchase_cost,
+          low_stock_threshold: s.low_stock_threshold,
+        };
+      })
+      .filter((i): i is StockedIngredient => i !== null);
+  }, [ingredientDefs, allIngredientStock, myBranchId]);
 
   const dishes = Array.from(new Map((recipes ?? []).map((r) => [r.dish_name, r])).values());
 
@@ -5497,7 +5725,7 @@ export const KitchenDisplay: React.FC = () => {
 
   const handleLogWaste = async () => {
     setWasteError('');
-    if (!currentUser) return;
+    if (!currentUser || !myBranchId) return;
     const qty = parseFloat(wasteQty);
     if (!wasteTargetId) {
       setWasteError(wasteTargetKind === 'dish' ? 'Select a dish.' : 'Select an ingredient.');
@@ -5517,7 +5745,7 @@ export const KitchenDisplay: React.FC = () => {
       name = ing.name;
       cost = qty * ing.last_purchase_cost;
       // Raw stock spoiled before use — take it out of the shelf count now.
-      await db.ingredients.update(ing.ingredient_id, {
+      await db.ingredientStock.update([myBranchId, ing.ingredient_id], {
         quantity_on_hand: Math.max(0, ing.quantity_on_hand - qty),
         synced: false,
       });
@@ -5530,6 +5758,7 @@ export const KitchenDisplay: React.FC = () => {
 
     await db.wasteLogs.add({
       waste_id: crypto.randomUUID(),
+      branch_id: myBranchId,
       dish_or_ingredient: name,
       quantity: qty,
       reason: wasteReason,
@@ -5543,6 +5772,7 @@ export const KitchenDisplay: React.FC = () => {
       const reasonLabel = WASTE_REASONS.find((r) => r.value === wasteReason)?.label ?? wasteReason;
       await db.staffLedgers.add({
         ledger_id: crypto.randomUUID(),
+        branch_id: myBranchId,
         staff_id: currentUser.user_id,
         date: new Date().toISOString(),
         shortage_amount: 0,
@@ -5560,7 +5790,7 @@ export const KitchenDisplay: React.FC = () => {
 
   // Handle Mark as Prepared & Deplete Ingredients
   const handleCompleteOrder = async (orderId: string, items: OrderItem[]) => {
-    if (!recipes || !ingredients) return;
+    if (!recipes || !ingredients || !myBranchId) return;
 
     // 1. Deduct ingredients for every item in the ticket based on recipe mappings
     for (const item of items) {
@@ -5575,9 +5805,9 @@ export const KitchenDisplay: React.FC = () => {
 
         if (ingredientItem) {
           const newQty = Math.max(0, ingredientItem.quantity_on_hand - requiredAmount);
-          await db.ingredients
-            .where('ingredient_id')
-            .equals(ingredientItem.ingredient_id)
+          await db.ingredientStock
+            .where('[branch_id+ingredient_id]')
+            .equals([myBranchId, ingredientItem.ingredient_id])
             .modify({
               quantity_on_hand: newQty,
               synced: false,
@@ -5849,117 +6079,6 @@ export const KitchenDisplay: React.FC = () => {
 };
 </file>
 
-<file path="src/App.tsx">
-import React from 'react';
-import { AuthProvider, useAuth } from './context/AuthContext';
-import { Login } from './pages/Login';
-import { WaiterPOS } from './pages/WaiterPOS';
-import { KitchenDisplay } from './pages/KitchenDisplay';
-import { AdminDashboard } from './pages/AdminDashboard';
-import { SuperAdminDashboard } from './pages/SuperAdminDashboard';
-import { LogOut, Cloud, CloudOff, RefreshCw, AlertTriangle } from 'lucide-react';
-import { useSyncStatus } from './hooks/useSyncStatus';
-
-const SyncBadge: React.FC = () => {
-  const { status, configured } = useSyncStatus();
-
-  if (!configured) {
-    return (
-      <div
-        title="Supabase not configured — running local-only, this device won't see other terminals"
-        className="flex items-center gap-1 text-zinc-500 bg-zinc-900/80 px-2 py-1.5 rounded-lg border border-zinc-800/80"
-      >
-        <CloudOff className="w-3.5 h-3.5" />
-      </div>
-    );
-  }
-
-  const config = {
-    offline: { icon: CloudOff, color: 'text-zinc-500', label: 'Offline — changes saved locally' },
-    syncing: { icon: RefreshCw, color: 'text-orange-400 animate-spin', label: 'Syncing…' },
-    synced: { icon: Cloud, color: 'text-emerald-400', label: 'Synced' },
-    error: { icon: AlertTriangle, color: 'text-red-400', label: 'Sync error — retrying' },
-  }[status];
-
-  const Icon = config.icon;
-
-  return (
-    <div
-      title={config.label}
-      className="flex items-center gap-1 bg-zinc-900/80 px-2 py-1.5 rounded-lg border border-zinc-800/80"
-    >
-      <Icon className={`w-3.5 h-3.5 ${config.color}`} />
-    </div>
-  );
-};
-
-const DashboardSwitch: React.FC = () => {
-  const { currentUser, logout } = useAuth();
-
-  if (!currentUser) {
-    return <Login />;
-  }
-
-  return (
-    <div className="min-h-screen bg-[#090a0f] text-zinc-100 font-sans selection:bg-orange-500 selection:text-white">
-      {/* PayRoller-Inspired Minimal Dark Header */}
-      <header className="bg-[#0f1117]/90 backdrop-blur-md border-b border-zinc-800/80 px-4 py-3 sticky top-0 z-50">
-        <div className="max-w-md mx-auto flex items-center justify-between">
-          {/* Logo Brand */}
-          <div className="flex items-center space-x-2">
-            <div>
-              <div className="flex items-center gap-1.5">
-                <span className="font-extrabold text-white text-base tracking-wider uppercase font-mono">
-                  GAROMAX
-                </span>
-                <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-mono font-bold bg-orange-500/10 text-orange-400 border border-orange-500/20 uppercase tracking-widest">
-                  {currentUser.role}
-                </span>
-              </div>
-            </div>
-          </div>
-
-          {/* User Profile, Sync Status & Logout */}
-          <div className="flex items-center gap-2">
-            <SyncBadge />
-            <div className="flex items-center text-xs text-zinc-300 font-mono bg-zinc-900/80 px-2.5 py-1.5 rounded-xl border border-zinc-800/80">
-              <span className="w-1.5 h-1.5 rounded-full bg-orange-500 mr-2 animate-pulse" />
-              <span className="truncate max-w-[100px] font-medium">{currentUser.name}</span>
-            </div>
-            <button
-              onClick={logout}
-              className="p-1.5 rounded-xl bg-zinc-900 hover:bg-zinc-800 text-zinc-400 hover:text-white transition active:scale-95 border border-zinc-800"
-              title="Log Out"
-            >
-              <LogOut className="w-4 h-4" />
-            </button>
-          </div>
-        </div>
-      </header>
-
-      {/* Main Content Area */}
-      <main className="p-4 max-w-md mx-auto">
-        {currentUser.role === 'waiter' && <WaiterPOS />}
-
-        {currentUser.role === 'cook' && <KitchenDisplay/>}
-
-        {currentUser.role === 'admin' && <AdminDashboard />}
-
-        {currentUser.role === 'superadmin' && <SuperAdminDashboard />}
-      </main>
-    </div>
-  );
-};
-
-export default function App() {
-  return (
-    <AuthProvider>
-      <DashboardSwitch />
-    </AuthProvider>
-  );
-}
-</file>
-
 <file path="supabase/schema.sql">
 -- Garomax Bites — Supabase schema (multi-branch)
 -- Run this in the Supabase SQL editor (Project → SQL Editor → New query)
@@ -6135,80 +6254,6 @@ create policy "allow all - recipes" on recipes for all using (true) with check (
 create policy "allow all - orders" on orders for all using (true) with check (true);
 create policy "allow all - waste_logs" on waste_logs for all using (true) with check (true);
 create policy "allow all - staff_ledgers" on staff_ledgers for all using (true) with check (true);
-</file>
-
-<file path="index.html">
-<!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <link rel="icon" type="image/svg+xml" href="./public/favicon.svg" />
-    <link rel="apple-touch-icon" href="/pwa-192x192.png" />
-    <meta name="theme-color" content="#0f1117" />
-    <meta name="apple-mobile-web-app-capable" content="yes" />
-    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
-    <title>Garomax Bites</title>
-  </head>
-  <body>
-    <div id="root"></div>
-    <script type="module" src="/src/main.tsx"></script>
-  </body>
-</html>
-</file>
-
-<file path="vite.config.ts">
-import { defineConfig } from 'vite';
-import react from '@vitejs/plugin-react';
-import tailwindcss from '@tailwindcss/vite';
-import { VitePWA } from 'vite-plugin-pwa';
-
-// https://vite.dev/config/
-export default defineConfig({
-  plugins: [
-    react(),
-    tailwindcss(),
-    VitePWA({
-      registerType: 'autoUpdate',
-      includeAssets: ['favicon.svg'],
-      manifest: {
-        name: 'Garomax Bites',
-        short_name: 'Garomax',
-        description: 'Restaurant stock and sales management — works offline.',
-        theme_color: '#090a0f',
-        background_color: '#090a0f',
-        display: 'standalone',
-        start_url: '/',
-        icons: [
-          { src: '/icons/icon-192.png', sizes: '192x192', type: 'image/png', purpose: 'any' },
-          { src: '/icons/icon-512.png', sizes: '512x512', type: 'image/png', purpose: 'any' },
-          { src: '/icons/icon-maskable-192.png', sizes: '192x192', type: 'image/png', purpose: 'maskable' },
-          { src: '/icons/icon-maskable-512.png', sizes: '512x512', type: 'image/png', purpose: 'maskable' },
-        ],
-      },
-      workbox: {
-        // Precache the built app shell (JS/CSS/HTML/icons) so the app itself
-        // opens with zero connectivity. Order data (Dexie/IndexedDB) is
-        // already local-first and handled separately from this cache.
-        globPatterns: ['**/*.{js,css,html,svg,png,ico}'],
-        // Supabase calls should never be served from a stale cache — always
-        // hit the network (or fail fast) so sync state never lies to the user.
-        runtimeCaching: [
-          {
-            urlPattern: ({ url }) => url.hostname.endsWith('.supabase.co'),
-            handler: 'NetworkOnly',
-          },
-        ],
-      },
-    }),
-  ],
-  server:{
-    host:true,
-    port:5173,
-    strictPort: true,
-    allowedHosts: true,
-  }
-});
 </file>
 
 <file path="src/db/seedLocalData.ts">
@@ -6841,7 +6886,7 @@ export function stopSync() {
 import React, { useMemo, useState } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db } from '../db/kibandaDB';
-import { useAuth } from '../context/AuthContext';
+import { useActiveBranchId } from '../context/BranchScopeContext';
 import {
   requestSync,
   deleteIngredientRemote,
@@ -6876,8 +6921,7 @@ const money = (n: number) => `KES ${n.toLocaleString(undefined, { maximumFractio
 const UNITS: Ingredient['unit'][] = ['g', 'kg', 'ml', 'l', 'pcs'];
 
 export const StockMenuManager: React.FC = () => {
-  const { currentUser } = useAuth();
-  const myBranchId = currentUser?.branch_id ?? null;
+  const myBranchId = useActiveBranchId();
 
   const ingredientDefs = useLiveQuery(() => db.ingredients.toArray(), []);
   const allIngredientStock = useLiveQuery(() => db.ingredientStock.toArray(), []);
@@ -7741,9 +7785,11 @@ export const WaiterPOS: React.FC = () => {
 
   // Live queries from Dexie DB
   const recipes = useLiveQuery(() => db.recipes.toArray(), []);
-  const activeOrders = useLiveQuery(() => 
+  const myBranchId = currentUser?.branch_id ?? null;
+  const allActiveOrders = useLiveQuery(() => 
     db.orders.where('payment_status').equals('active').reverse().toArray(), []
   );
+  const activeOrders = allActiveOrders?.filter((o) => o.branch_id === myBranchId);
 
   // Get unique list of dishes from recipe mappings
   const dishes = Array.from(
@@ -7796,10 +7842,11 @@ export const WaiterPOS: React.FC = () => {
 
   // Send Order to Kitchen (Strictly Active/Unpaid)
   const handleSendToKitchen = async () => {
-    if (cart.length === 0 || !currentUser) return;
+    if (cart.length === 0 || !currentUser?.branch_id) return;
 
     const newOrder = {
       order_id: crypto.randomUUID(),
+      branch_id: currentUser.branch_id,
       payment_status: 'active' as const,
       kitchen_status: 'queued' as const,
       items: cart,
@@ -8245,6 +8292,174 @@ export const WaiterPOS: React.FC = () => {
 };
 </file>
 
+<file path="src/App.tsx">
+import React, { useState } from 'react';
+import { AuthProvider, useAuth } from './context/AuthContext';
+import { Login } from './pages/Login';
+import { WaiterPOS } from './pages/WaiterPOS';
+import { KitchenDisplay } from './pages/KitchenDisplay';
+import { AdminDashboard } from './pages/AdminDashboard';
+import { SuperAdminDashboard } from './pages/SuperAdminDashboard';
+import { LogOut, Cloud, CloudOff, RefreshCw, AlertTriangle, Pencil, X } from 'lucide-react';
+import { useSyncStatus } from './hooks/useSyncStatus';
+
+const SyncBadge: React.FC = () => {
+  const { status, configured } = useSyncStatus();
+
+  if (!configured) {
+    return (
+      <div
+        title="Supabase not configured — running local-only, this device won't see other terminals"
+        className="flex items-center gap-1 text-zinc-500 bg-zinc-900/80 px-2 py-1.5 rounded-lg border border-zinc-800/80"
+      >
+        <CloudOff className="w-3.5 h-3.5" />
+      </div>
+    );
+  }
+
+  const config = {
+    offline: { icon: CloudOff, color: 'text-zinc-500', label: 'Offline — changes saved locally' },
+    syncing: { icon: RefreshCw, color: 'text-orange-400 animate-spin', label: 'Syncing…' },
+    synced: { icon: Cloud, color: 'text-emerald-400', label: 'Synced' },
+    error: { icon: AlertTriangle, color: 'text-red-400', label: 'Sync error — retrying' },
+  }[status];
+
+  const Icon = config.icon;
+
+  return (
+    <div
+      title={config.label}
+      className="flex items-center gap-1 bg-zinc-900/80 px-2 py-1.5 rounded-lg border border-zinc-800/80"
+    >
+      <Icon className={`w-3.5 h-3.5 ${config.color}`} />
+    </div>
+  );
+};
+
+const DashboardSwitch: React.FC = () => {
+  const { currentUser, logout, updateOwnName } = useAuth();
+  const [showNameEdit, setShowNameEdit] = useState(false);
+  const [nameInput, setNameInput] = useState('');
+
+  if (!currentUser) {
+    return <Login />;
+  }
+
+  const openNameEdit = () => {
+    setNameInput(currentUser.name);
+    setShowNameEdit(true);
+  };
+
+  const saveName = async () => {
+    await updateOwnName(nameInput);
+    setShowNameEdit(false);
+  };
+
+  return (
+    <div className="min-h-screen bg-[#090a0f] text-zinc-100 font-sans selection:bg-orange-500 selection:text-white">
+      {/* PayRoller-Inspired Minimal Dark Header */}
+      <header className="bg-[#0f1117]/90 backdrop-blur-md border-b border-zinc-800/80 px-4 py-3 sticky top-0 z-50">
+        <div className="max-w-md mx-auto flex items-center justify-between">
+          {/* Logo Brand */}
+          <div className="flex items-center space-x-2">
+            <div>
+              <div className="flex items-center gap-1.5">
+                <span className="font-extrabold text-white text-base tracking-wider uppercase font-mono">
+                  GAROMAX
+                </span>
+                <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-mono font-bold bg-orange-500/10 text-orange-400 border border-orange-500/20 uppercase tracking-widest">
+                  {currentUser.role}
+                </span>
+              </div>
+            </div>
+          </div>
+
+          {/* User Profile, Sync Status & Logout */}
+          <div className="flex items-center gap-2">
+            <SyncBadge />
+            <button
+              onClick={openNameEdit}
+              title="Edit display name"
+              className="flex items-center text-xs text-zinc-300 font-mono bg-zinc-900/80 px-2.5 py-1.5 rounded-xl border border-zinc-800/80 hover:border-orange-500/40 transition"
+            >
+              <span className="w-1.5 h-1.5 rounded-full bg-orange-500 mr-2 animate-pulse" />
+              <span className="truncate max-w-[100px] font-medium">{currentUser.name}</span>
+              <Pencil className="w-3 h-3 ml-1.5 text-zinc-500" />
+            </button>
+            <button
+              onClick={logout}
+              className="p-1.5 rounded-xl bg-zinc-900 hover:bg-zinc-800 text-zinc-400 hover:text-white transition active:scale-95 border border-zinc-800"
+              title="Log Out"
+            >
+              <LogOut className="w-4 h-4" />
+            </button>
+          </div>
+        </div>
+      </header>
+
+      {/* Main Content Area */}
+      <main className="p-4 max-w-md mx-auto">
+        {currentUser.role === 'waiter' && <WaiterPOS />}
+
+        {currentUser.role === 'cook' && <KitchenDisplay/>}
+
+        {currentUser.role === 'admin' && <AdminDashboard />}
+
+        {currentUser.role === 'superadmin' && <SuperAdminDashboard />}
+      </main>
+
+      {/* Edit Display Name Modal */}
+      {showNameEdit && (
+        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/70 backdrop-blur-sm p-4">
+          <div className="relative w-full max-w-sm bg-[#0f1117] border border-zinc-800 rounded-3xl p-5 shadow-2xl space-y-4">
+            <div className="flex items-center justify-between">
+              <h3 className="font-mono text-xs font-bold text-white uppercase tracking-wider">
+                Edit Display Name
+              </h3>
+              <button
+                onClick={() => setShowNameEdit(false)}
+                className="p-1.5 rounded-lg bg-zinc-900 hover:bg-zinc-800 text-zinc-400 border border-zinc-800"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
+
+            <div>
+              <label className="text-[10px] font-mono text-zinc-500 uppercase tracking-widest mb-1 block">
+                Name
+              </label>
+              <input
+                type="text"
+                value={nameInput}
+                onChange={(e) => setNameInput(e.target.value)}
+                placeholder="e.g. Jane Wanjiru"
+                className="w-full bg-zinc-950 border border-zinc-700 rounded-xl px-3 py-2.5 text-sm text-white font-mono focus:outline-none focus:border-orange-500"
+              />
+            </div>
+
+            <button
+              onClick={saveName}
+              disabled={!nameInput.trim()}
+              className="w-full py-3.5 bg-orange-500 hover:bg-orange-400 disabled:opacity-40 disabled:pointer-events-none active:scale-[0.98] text-zinc-950 font-mono font-bold uppercase tracking-wider text-xs rounded-2xl transition shadow-lg shadow-orange-500/20"
+            >
+              Save
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
+export default function App() {
+  return (
+    <AuthProvider>
+      <DashboardSwitch />
+    </AuthProvider>
+  );
+}
+</file>
+
 <file path="src/db/kibandaDB.ts">
 import Dexie, { type Table } from 'dexie';
 import type {
@@ -8518,6 +8733,7 @@ import { useLiveQuery } from 'dexie-react-hooks';
 import { db } from '../db/kibandaDB';
 import { requestSync, deleteUserRemote } from '../db/sync';
 import { useAuth } from '../context/AuthContext';
+import { useActiveBranchId } from '../context/BranchScopeContext';
 import { StockMenuManager } from './StockMenuManager';
 import { FixedAssetsManager } from './FixedAssetsManager';
 import { Pagination } from '../components/Pagination';
@@ -8551,7 +8767,7 @@ type AdminTab = 'overview' | 'stock' | 'assets' | 'staff' | 'money';
 
 export const AdminDashboard: React.FC = () => {
   const { currentUser } = useAuth();
-  const myBranchId = currentUser?.branch_id ?? null;
+  const myBranchId = useActiveBranchId();
 
   const branches = useLiveQuery(() => db.branches.toArray(), []);
   const myBranch = (branches ?? []).find((b) => b.branch_id === myBranchId);
@@ -8735,7 +8951,8 @@ export const AdminDashboard: React.FC = () => {
       return; // guarded in the UI already, but double-check before any write
     }
     const adminCount = staff.filter((s) => s.role === 'admin').length;
-    if (target.role === 'admin' && adminCount <= 1) {
+    const isSuperAdminViewer = currentUser?.role === 'superadmin';
+    if (!isSuperAdminViewer && target.role === 'admin' && adminCount <= 1) {
       setConfirmDeleteStaff(null);
       return; // must always keep at least one admin account
     }
@@ -9120,7 +9337,8 @@ export const AdminDashboard: React.FC = () => {
               pagedStaff.map((s) => {
               const adminCount = (staff ?? []).filter((x) => x.role === 'admin').length;
               const isSelf = currentUser?.user_id === s.user_id;
-              const isLastAdmin = s.role === 'admin' && adminCount <= 1;
+              const isSuperAdminViewer = currentUser?.role === 'superadmin';
+              const isLastAdmin = !isSuperAdminViewer && s.role === 'admin' && adminCount <= 1;
               const isConfirming = confirmDeleteStaff === s.user_id;
               const deductions = staffDeductions.get(s.user_id) ?? 0;
               const netPay = s.basic_salary - deductions;
@@ -9434,7 +9652,7 @@ export const AdminDashboard: React.FC = () => {
 
       {/* ===================== BOTTOM TAB BAR ===================== */}
       <nav className="fixed bottom-0 left-0 right-0 z-50 bg-[#0f1117]/95 backdrop-blur-md border-t border-zinc-800/80">
-        <div className="max-w-md mx-auto grid grid-cols-4">
+        <div className="max-w-md mx-auto grid grid-cols-5">
           {TABS.map((t) => {
             const Icon = t.icon;
             const isActive = activeTab === t.id;

@@ -6,6 +6,7 @@ import { useAuth } from '../context/AuthContext';
 import { useActiveBranchId } from '../context/BranchScopeContext';
 import { StockMenuManager } from './StockMenuManager';
 import { FixedAssetsManager } from './FixedAssetsManager';
+import { SalesTargetManager } from '../components/SalesTargetManager';
 import { Pagination } from '../components/Pagination';
 import { usePagination } from '../components/usePagination';
 import { SearchInput } from '../components/SearchInput';
@@ -227,8 +228,19 @@ export const AdminDashboard: React.FC = () => {
       return; // must always keep at least one admin account
     }
 
+    // Delete on the server first — awaited. Only clear the local copy once
+    // Supabase confirms it's gone; otherwise the row would vanish from this
+    // screen while still existing remotely (e.g. blocked by a foreign key),
+    // then silently reappear the next time this device syncs.
+    const ok = await deleteUserRemote(userId);
+    if (!ok) {
+      setStaffError(
+        `Could not delete ${target.name} on the server — check your connection, or that no other record (like a payroll ledger entry) still references them, and try again.`
+      );
+      setConfirmDeleteStaff(null);
+      return;
+    }
     await db.users.delete(userId);
-    deleteUserRemote(userId);
     setConfirmDeleteStaff(null);
   };
 
@@ -449,6 +461,7 @@ export const AdminDashboard: React.FC = () => {
       {activeTab === 'overview' && (
         <div className="space-y-5">
           <div className="relative bg-[#0f1117] border border-zinc-800/80 rounded-2xl p-4 shadow-xl space-y-4">
+          <SalesTargetManager branchId={myBranchId} />
             <div className="flex items-center gap-2 border-b border-zinc-800/80 pb-2">
               <TrendingUp className="w-4 h-4 text-orange-400" />
               <span className="font-mono text-xs font-bold text-zinc-300 uppercase tracking-wider">

@@ -116,6 +116,25 @@ export interface StaffLedger {
   synced?: boolean;
 }
 
+export type PeriodType = 'daily' | 'weekly' | 'monthly';
+
+// A target the admin sets for a branch (or company-wide when branch_id is
+// unset). Only one target per period_type per branch should be `active` at
+// a time — creating a new one retires the old one instead of deleting it,
+// so past targets stay around for actual-vs-target comparison.
+export interface SalesTarget {
+  target_id: string;
+  branch_id: string | null;
+  period_type: PeriodType;
+  start_date: string; // 'YYYY-MM-DD'
+  end_date: string; // 'YYYY-MM-DD'
+  target_amount: number;
+  set_by_user_id: string;
+  active: boolean;
+  created_at: string;
+  synced?: boolean;
+}
+
 // One row per branch per month — mirrors the `monthly_branch_stats` SQL view,
 // queried directly from Supabase for the SuperAdmin Overview tab (not stored
 // locally in Dexie — this is a reporting view, not offline-first data).

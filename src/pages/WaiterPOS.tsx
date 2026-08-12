@@ -4,6 +4,7 @@ import { db } from '../db/kibandaDB';
 import { requestSync } from '../db/sync';
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
 import { useAuth } from '../context/AuthContext';
+import { SalesTargetBadge } from '../components/SalesTargetBadge';
 import type { Order, OrderItem, PaymentMethod } from '../types';
 import { Plus, Minus, Send, Clock, CheckCircle, ShoppingBag, Flame, ChefHat, Mail, MessageSquareText, X } from 'lucide-react';
 
@@ -168,6 +169,7 @@ export const WaiterPOS: React.FC = () => {
 
   return (
     <div className="pb-20 max-w-md mx-auto">
+      <SalesTargetBadge branchId={myBranchId} />
       {/* PayRoller-Style Segmented Navigation Switcher */}
       <div className="flex bg-[#0f1117] p-1 rounded-2xl border border-zinc-800/80 mb-5 shadow-lg">
         <button

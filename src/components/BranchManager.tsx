@@ -1,9 +1,9 @@
 import React, { useState } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db } from '../db/kibandaDB';
-import { requestSync } from '../db/sync';
+import { requestSync, deleteBranchRemote } from '../db/sync';
 import type { Branch } from '../types';
-import { Building2, Plus, Pencil, Check, X, MapPin } from 'lucide-react';
+import { Building2, Plus, Pencil, Check, X, MapPin, Trash2 } from 'lucide-react';
 
 function slugify(name: string): string {
   return name
@@ -15,6 +15,8 @@ function slugify(name: string): string {
 
 export const BranchManager: React.FC = () => {
   const branches = useLiveQuery(() => db.branches.toArray(), []) ?? [];
+  const allUsers = useLiveQuery(() => db.users.toArray(), []) ?? [];
+  const allOrders = useLiveQuery(() => db.orders.toArray(), []) ?? [];
 
   // -------------------------------------------------------------------
   // Add branch
@@ -85,6 +87,43 @@ export const BranchManager: React.FC = () => {
     cancelEditing();
   };
 
+  // -------------------------------------------------------------------
+  // Delete branch
+  // -------------------------------------------------------------------
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+  const [deleteError, setDeleteError] = useState('');
+
+  // A branch that still has staff or order history can't be deleted outright
+  // — every branch-scoped table (users, orders, waste_logs, staff_ledgers,
+  // ingredient_stock, fixed_assets) FKs to branches(branch_id), so a raw
+  // delete would just hit the same blocked-FK wall staff deletion used to.
+  // Reassign/remove staff and let order history age out naturally instead
+  // of silently cascading financial records away.
+  const branchDependents = (branchId: string) => ({
+    staffCount: allUsers.filter((u) => u.branch_id === branchId).length,
+    orderCount: allOrders.filter((o) => o.branch_id === branchId).length,
+  });
+
+  const handleDeleteBranch = async (branch: Branch) => {
+    setDeleteError('');
+    const { staffCount, orderCount } = branchDependents(branch.branch_id);
+    if (staffCount > 0 || orderCount > 0) {
+      setDeleteError(
+        `Can't delete ${branch.name} — it still has ${staffCount} staff account${staffCount === 1 ? '' : 's'} and ${orderCount} order${orderCount === 1 ? '' : 's'} on record. Reassign or remove staff first.`
+      );
+      setConfirmDeleteId(null);
+      return;
+    }
+    const ok = await deleteBranchRemote(branch.branch_id);
+    if (!ok) {
+      setDeleteError('Could not delete on the server — check your connection and try again.');
+      setConfirmDeleteId(null);
+      return;
+    }
+    await db.branches.delete(branch.branch_id);
+    setConfirmDeleteId(null);
+  };
+
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
@@ -137,6 +176,8 @@ export const BranchManager: React.FC = () => {
         </div>
       )}
 
+      {deleteError && <p className="text-xs text-red-400">{deleteError}</p>}
+
       <div className="space-y-2">
         {branches.length === 0 && (
           <p className="text-xs text-zinc-500 text-center py-6">
@@ -161,7 +202,7 @@ export const BranchManager: React.FC = () => {
                   value={editLocation}
                   onChange={(e) => setEditLocation(e.target.value)}
                   placeholder="Location (optional)"
-                  className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-sm text-zinc-100 placeholder:text-zinc-600 focus:outline-none focus:border-orange-500/50"
+                  className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-sm text-zinc-100 focus:outline-none focus:border-orange-500/50"
                 />
                 <div className="flex gap-2">
                   <button
@@ -180,6 +221,25 @@ export const BranchManager: React.FC = () => {
                   </button>
                 </div>
               </div>
+            ) : confirmDeleteId === branch.branch_id ? (
+              <div className="flex items-center justify-between gap-2">
+                <p className="text-xs text-red-300">Delete {branch.name}? This can't be undone.</p>
+                <div className="flex gap-1.5 shrink-0">
+                  <button
+                    onClick={() => setConfirmDeleteId(null)}
+                    className="p-1.5 rounded-lg bg-zinc-800/80 hover:bg-zinc-800 text-zinc-400 hover:text-white transition"
+                    title="Cancel"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                  <button
+                    onClick={() => handleDeleteBranch(branch)}
+                    className="px-2.5 py-1.5 rounded-lg bg-red-500/10 border border-red-500/30 text-red-400 hover:bg-red-500/20 text-[11px] font-bold transition"
+                  >
+                    Confirm Delete
+                  </button>
+                </div>
+              </div>
             ) : (
               <div className="flex items-center justify-between">
                 <div>
@@ -192,13 +252,22 @@ export const BranchManager: React.FC = () => {
                   )}
                   <p className="text-[10px] text-zinc-600 font-mono mt-1">{branch.branch_id}</p>
                 </div>
-                <button
-                  onClick={() => startEditing(branch)}
-                  className="p-1.5 rounded-lg bg-zinc-800/80 hover:bg-zinc-800 text-zinc-400 hover:text-white transition"
-                  title="Rename branch"
-                >
-                  <Pencil className="w-3.5 h-3.5" />
-                </button>
+                <div className="flex gap-1.5 shrink-0">
+                  <button
+                    onClick={() => startEditing(branch)}
+                    className="p-1.5 rounded-lg bg-zinc-800/80 hover:bg-zinc-800 text-zinc-400 hover:text-white transition"
+                    title="Rename branch"
+                  >
+                    <Pencil className="w-3.5 h-3.5" />
+                  </button>
+                  <button
+                    onClick={() => { setDeleteError(''); setConfirmDeleteId(branch.branch_id); }}
+                    className="p-1.5 rounded-lg bg-zinc-800/80 hover:bg-red-500/20 text-zinc-400 hover:text-red-400 transition"
+                    title="Delete branch"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </button>
+                </div>
               </div>
             )}
           </div>

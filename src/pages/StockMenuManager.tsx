@@ -163,9 +163,13 @@ export const StockMenuManager: React.FC = () => {
   const [confirmDeleteIngredient, setConfirmDeleteIngredient] = useState<string | null>(null);
 
   const handleDeleteIngredient = async (id: string) => {
-    await db.ingredients.delete(id);
+    const ok = await deleteIngredientRemote(id);
+    if (!ok) {
+      setIngError('Could not delete on the server — check your connection and try again.');
+      setConfirmDeleteIngredient(null);
+      return;
+    } await db.ingredients.delete(id);
     if (myBranchId) await db.ingredientStock.delete([myBranchId, id]);
-    deleteIngredientRemote(id);
     setConfirmDeleteIngredient(null);
   };
 
@@ -248,15 +252,23 @@ export const StockMenuManager: React.FC = () => {
   const [confirmDeleteDish, setConfirmDeleteDish] = useState<string | null>(null);
 
   const handleDeleteDish = async (dish_name: string) => {
+    const ok = await deleteRecipeDishRemote(dish_name);
+    if (!ok) {
+      setDishError('Could not delete on the server — check your connection and try again.');
+      setConfirmDeleteDish(null);
+      return;
+    }
     await db.recipes.where('dish_name').equals(dish_name).delete();
-    deleteRecipeDishRemote(dish_name);
     setConfirmDeleteDish(null);
   };
 
   const handleRemoveDishLine = async (dish_name: string, ingredient_id: string, lineCount: number) => {
-    if (lineCount <= 1) return; // guard: use Delete Dish instead of stripping the last ingredient
+    const ok = await deleteRecipeLineRemote(dish_name, ingredient_id);
+    if (!ok) {
+      setDishError('Could not remove that ingredient on the server — check your connection and try again.');
+      return;
+    }
     await db.recipes.delete([dish_name, ingredient_id]);
-    deleteRecipeLineRemote(dish_name, ingredient_id);
   };
 
   // -------------------------------------------------------------------
@@ -349,9 +361,8 @@ export const StockMenuManager: React.FC = () => {
                 return (
                   <div
                     key={ing.ingredient_id}
-                    className={`p-2.5 rounded-xl border ${
-                      isLow ? 'bg-red-500/5 border-red-500/20' : 'bg-zinc-900/60 border-zinc-800/60'
-                    }`}
+                    className={`p-2.5 rounded-xl border ${isLow ? 'bg-red-500/5 border-red-500/20' : 'bg-zinc-900/60 border-zinc-800/60'
+                      }`}
                   >
                     <div className="flex items-center justify-between">
                       <div>
@@ -448,148 +459,148 @@ export const StockMenuManager: React.FC = () => {
                 <p className="text-zinc-600 text-[11px] font-mono text-center py-6">No dishes match your search</p>
               )}
               {pagedDishes.map((dish) => {
-              const isEditingPrice = editingPriceDish === dish.dish_name;
-              const isConfirmingDelete = confirmDeleteDish === dish.dish_name;
-              const isAddingLine = addingLineTo === dish.dish_name;
-              const availableIngredients = (ingredients ?? []).filter(
-                (i) => !dish.lines.some((l) => l.ingredient_id === i.ingredient_id)
-              );
+                const isEditingPrice = editingPriceDish === dish.dish_name;
+                const isConfirmingDelete = confirmDeleteDish === dish.dish_name;
+                const isAddingLine = addingLineTo === dish.dish_name;
+                const availableIngredients = (ingredients ?? []).filter(
+                  (i) => !dish.lines.some((l) => l.ingredient_id === i.ingredient_id)
+                );
 
-              return (
-                <div key={dish.dish_name} className="bg-zinc-900/60 border border-zinc-800/60 rounded-xl p-3 space-y-2">
-                  <div className="flex items-center justify-between">
-                    <span className="text-sm font-semibold text-white">{dish.dish_name}</span>
-                    <div className="flex items-center gap-1.5">
-                      {isEditingPrice ? (
-                        <>
-                          <input
-                            type="number"
-                            autoFocus
-                            value={editingPriceValue}
-                            onChange={(e) => setEditingPriceValue(e.target.value)}
-                            className="w-16 bg-zinc-950 border border-orange-500/40 rounded-lg px-1.5 py-0.5 text-xs text-white font-mono text-right focus:outline-none"
-                          />
+                return (
+                  <div key={dish.dish_name} className="bg-zinc-900/60 border border-zinc-800/60 rounded-xl p-3 space-y-2">
+                    <div className="flex items-center justify-between">
+                      <span className="text-sm font-semibold text-white">{dish.dish_name}</span>
+                      <div className="flex items-center gap-1.5">
+                        {isEditingPrice ? (
+                          <>
+                            <input
+                              type="number"
+                              autoFocus
+                              value={editingPriceValue}
+                              onChange={(e) => setEditingPriceValue(e.target.value)}
+                              className="w-16 bg-zinc-950 border border-orange-500/40 rounded-lg px-1.5 py-0.5 text-xs text-white font-mono text-right focus:outline-none"
+                            />
+                            <button
+                              onClick={() => handleSavePrice(dish.dish_name)}
+                              className="p-1 rounded-lg bg-orange-500 text-zinc-950"
+                            >
+                              <Check className="w-3 h-3" />
+                            </button>
+                          </>
+                        ) : (
                           <button
-                            onClick={() => handleSavePrice(dish.dish_name)}
-                            className="p-1 rounded-lg bg-orange-500 text-zinc-950"
+                            onClick={() => {
+                              setEditingPriceDish(dish.dish_name);
+                              setEditingPriceValue(String(dish.selling_price));
+                            }}
+                            className="flex items-center gap-1 text-orange-400 font-mono font-bold text-xs"
                           >
-                            <Check className="w-3 h-3" />
+                            {money(dish.selling_price)} <Pencil className="w-3 h-3 opacity-60" />
                           </button>
-                        </>
-                      ) : (
+                        )}
                         <button
-                          onClick={() => {
-                            setEditingPriceDish(dish.dish_name);
-                            setEditingPriceValue(String(dish.selling_price));
-                          }}
-                          className="flex items-center gap-1 text-orange-400 font-mono font-bold text-xs"
+                          onClick={() => setConfirmDeleteDish(dish.dish_name)}
+                          title="Delete dish"
+                          className="p-1.5 rounded-lg bg-zinc-800 hover:bg-red-500/20 text-zinc-400 hover:text-red-400"
                         >
-                          {money(dish.selling_price)} <Pencil className="w-3 h-3 opacity-60" />
+                          <Trash2 className="w-3.5 h-3.5" />
                         </button>
-                      )}
-                      <button
-                        onClick={() => setConfirmDeleteDish(dish.dish_name)}
-                        title="Delete dish"
-                        className="p-1.5 rounded-lg bg-zinc-800 hover:bg-red-500/20 text-zinc-400 hover:text-red-400"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </button>
+                      </div>
                     </div>
-                  </div>
 
-                  {/* Ingredient composition */}
-                  <div className="space-y-1">
-                    {dish.lines.map((line) => {
-                      const ing = ingredientMap.get(line.ingredient_id);
-                      return (
-                        <div
-                          key={line.ingredient_id}
-                          className="flex items-center justify-between text-[10px] font-mono text-zinc-400 bg-zinc-950/60 px-2 py-1 rounded-lg"
-                        >
-                          <span>{ing?.name ?? 'Unknown ingredient'}</span>
-                          <div className="flex items-center gap-2">
-                            <span>
-                              {line.quantity_per_plate} {ing?.unit}
-                            </span>
-                            {dish.lines.length > 1 && (
-                              <button
-                                onClick={() => handleRemoveDishLine(dish.dish_name, line.ingredient_id, dish.lines.length)}
-                                className="text-zinc-600 hover:text-red-400"
-                              >
-                                <X className="w-3 h-3" />
-                              </button>
-                            )}
+                    {/* Ingredient composition */}
+                    <div className="space-y-1">
+                      {dish.lines.map((line) => {
+                        const ing = ingredientMap.get(line.ingredient_id);
+                        return (
+                          <div
+                            key={line.ingredient_id}
+                            className="flex items-center justify-between text-[10px] font-mono text-zinc-400 bg-zinc-950/60 px-2 py-1 rounded-lg"
+                          >
+                            <span>{ing?.name ?? 'Unknown ingredient'}</span>
+                            <div className="flex items-center gap-2">
+                              <span>
+                                {line.quantity_per_plate} {ing?.unit}
+                              </span>
+                              {dish.lines.length > 1 && (
+                                <button
+                                  onClick={() => handleRemoveDishLine(dish.dish_name, line.ingredient_id, dish.lines.length)}
+                                  className="text-zinc-600 hover:text-red-400"
+                                >
+                                  <X className="w-3 h-3" />
+                                </button>
+                              )}
+                            </div>
                           </div>
-                        </div>
-                      );
-                    })}
+                        );
+                      })}
+                    </div>
+
+                    {/* Add ingredient line */}
+                    {isAddingLine ? (
+                      <div className="flex items-center gap-1.5 pt-1">
+                        <select
+                          value={newLineIngredient}
+                          onChange={(e) => setNewLineIngredient(e.target.value)}
+                          className="flex-1 bg-zinc-950 border border-zinc-700 rounded-lg px-2 py-1.5 text-[10px] text-white font-mono focus:outline-none focus:border-orange-500"
+                        >
+                          <option value="">Ingredient...</option>
+                          {availableIngredients.map((i) => (
+                            <option key={i.ingredient_id} value={i.ingredient_id}>
+                              {i.name}
+                            </option>
+                          ))}
+                        </select>
+                        <input
+                          type="number"
+                          placeholder="Qty"
+                          value={newLineQty}
+                          onChange={(e) => setNewLineQty(e.target.value)}
+                          className="w-14 bg-zinc-950 border border-zinc-700 rounded-lg px-1.5 py-1.5 text-[10px] text-white font-mono focus:outline-none focus:border-orange-500"
+                        />
+                        <button
+                          onClick={() => handleAddLineToDish(dish.dish_name, dish.selling_price)}
+                          className="p-1.5 rounded-lg bg-orange-500 text-zinc-950"
+                        >
+                          <Check className="w-3.5 h-3.5" />
+                        </button>
+                        <button
+                          onClick={() => setAddingLineTo(null)}
+                          className="p-1.5 rounded-lg bg-zinc-800 text-zinc-400"
+                        >
+                          <X className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    ) : (
+                      availableIngredients.length > 0 && (
+                        <button
+                          onClick={() => setAddingLineTo(dish.dish_name)}
+                          className="text-[10px] font-mono text-zinc-500 hover:text-orange-400 flex items-center gap-1"
+                        >
+                          <Plus className="w-3 h-3" /> Add ingredient
+                        </button>
+                      )
+                    )}
+
+                    {isConfirmingDelete && (
+                      <div className="flex gap-2 pt-1">
+                        <button
+                          onClick={() => setConfirmDeleteDish(null)}
+                          className="flex-1 py-1.5 bg-zinc-800 text-zinc-400 rounded-lg font-mono text-[10px] font-bold uppercase"
+                        >
+                          Cancel
+                        </button>
+                        <button
+                          onClick={() => handleDeleteDish(dish.dish_name)}
+                          className="flex-1 py-1.5 bg-red-500/20 text-red-400 border border-red-500/30 rounded-lg font-mono text-[10px] font-bold uppercase"
+                        >
+                          Confirm Delete
+                        </button>
+                      </div>
+                    )}
                   </div>
-
-                  {/* Add ingredient line */}
-                  {isAddingLine ? (
-                    <div className="flex items-center gap-1.5 pt-1">
-                      <select
-                        value={newLineIngredient}
-                        onChange={(e) => setNewLineIngredient(e.target.value)}
-                        className="flex-1 bg-zinc-950 border border-zinc-700 rounded-lg px-2 py-1.5 text-[10px] text-white font-mono focus:outline-none focus:border-orange-500"
-                      >
-                        <option value="">Ingredient...</option>
-                        {availableIngredients.map((i) => (
-                          <option key={i.ingredient_id} value={i.ingredient_id}>
-                            {i.name}
-                          </option>
-                        ))}
-                      </select>
-                      <input
-                        type="number"
-                        placeholder="Qty"
-                        value={newLineQty}
-                        onChange={(e) => setNewLineQty(e.target.value)}
-                        className="w-14 bg-zinc-950 border border-zinc-700 rounded-lg px-1.5 py-1.5 text-[10px] text-white font-mono focus:outline-none focus:border-orange-500"
-                      />
-                      <button
-                        onClick={() => handleAddLineToDish(dish.dish_name, dish.selling_price)}
-                        className="p-1.5 rounded-lg bg-orange-500 text-zinc-950"
-                      >
-                        <Check className="w-3.5 h-3.5" />
-                      </button>
-                      <button
-                        onClick={() => setAddingLineTo(null)}
-                        className="p-1.5 rounded-lg bg-zinc-800 text-zinc-400"
-                      >
-                        <X className="w-3.5 h-3.5" />
-                      </button>
-                    </div>
-                  ) : (
-                    availableIngredients.length > 0 && (
-                      <button
-                        onClick={() => setAddingLineTo(dish.dish_name)}
-                        className="text-[10px] font-mono text-zinc-500 hover:text-orange-400 flex items-center gap-1"
-                      >
-                        <Plus className="w-3 h-3" /> Add ingredient
-                      </button>
-                    )
-                  )}
-
-                  {isConfirmingDelete && (
-                    <div className="flex gap-2 pt-1">
-                      <button
-                        onClick={() => setConfirmDeleteDish(null)}
-                        className="flex-1 py-1.5 bg-zinc-800 text-zinc-400 rounded-lg font-mono text-[10px] font-bold uppercase"
-                      >
-                        Cancel
-                      </button>
-                      <button
-                        onClick={() => handleDeleteDish(dish.dish_name)}
-                        className="flex-1 py-1.5 bg-red-500/20 text-red-400 border border-red-500/30 rounded-lg font-mono text-[10px] font-bold uppercase"
-                      >
-                        Confirm Delete
-                      </button>
-                    </div>
-                  )}
-                </div>
-              );
-            })}
+                );
+              })}
             </>
           )}
         </div>
@@ -634,11 +645,10 @@ export const StockMenuManager: React.FC = () => {
                     <button
                       key={u}
                       onClick={() => setIngUnit(u)}
-                      className={`py-2 text-[10px] font-mono font-bold uppercase rounded-lg border transition ${
-                        ingUnit === u
-                          ? 'bg-orange-500 text-zinc-950 border-orange-400'
-                          : 'bg-zinc-800 text-zinc-400 border-zinc-700'
-                      }`}
+                      className={`py-2 text-[10px] font-mono font-bold uppercase rounded-lg border transition ${ingUnit === u
+                        ? 'bg-orange-500 text-zinc-950 border-orange-400'
+                        : 'bg-zinc-800 text-zinc-400 border-zinc-700'
+                        }`}
                     >
                       {u}
                     </button>

@@ -9,6 +9,7 @@ import type {
   WasteLog,
   StaffLedger,
   FixedAsset,
+  SalesTarget,
 } from '../types';
 
 export class KibandaDatabase extends Dexie {
@@ -21,6 +22,7 @@ export class KibandaDatabase extends Dexie {
   wasteLogs!: Table<WasteLog>;
   staffLedgers!: Table<StaffLedger>;
   fixedAssets!: Table<FixedAsset>;
+  salesTargets!: Table<SalesTarget>;
 
   constructor() {
     super('GaromaxBitesDB');
@@ -124,6 +126,20 @@ export class KibandaDatabase extends Dexie {
     // A new table, so no data migration needed, just the schema.
     this.version(5).stores({
       fixedAssets: 'asset_id, branch_id, category, synced',
+    });
+
+   // v6: admin-set sales targets (daily/weekly/monthly), scoped per branch.
+    this.version(6).stores({
+      salesTargets: 'target_id, branch_id, period_type, active, synced',
+    });
+
+    // v7: SalesTargetManager sorts by created_at (`.orderBy('created_at')`),
+    // which needs the field indexed — v6 shipped without it. Fixing v6 in
+    // place wouldn't help devices that already ran it, since Dexie never
+    // re-runs a version once it's been applied locally — hence a new
+    // version bump instead of editing v6 above.
+    this.version(7).stores({
+      salesTargets: 'target_id, branch_id, period_type, active, synced, created_at',
     });
   }
 }

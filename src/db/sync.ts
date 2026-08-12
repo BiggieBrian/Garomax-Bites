@@ -10,6 +10,7 @@ import type {
   WasteLog,
   StaffLedger,
   FixedAsset,
+  SalesTarget,
 } from '../types';
 
 export type SyncStatus = 'offline' | 'syncing' | 'synced' | 'error';
@@ -229,6 +230,32 @@ const assetFromRow = (r: any): FixedAsset => ({
   synced: true,
 });
 
+const salesTargetToRow = (t: SalesTarget) => ({
+  target_id: t.target_id,
+  branch_id: t.branch_id,
+  period_type: t.period_type,
+  start_date: t.start_date,
+  end_date: t.end_date,
+  target_amount: t.target_amount,
+  set_by_user_id: t.set_by_user_id,
+  active: t.active,
+  created_at: t.created_at,
+});
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const salesTargetFromRow = (r: any): SalesTarget => ({
+  target_id: r.target_id,
+  branch_id: r.branch_id ?? null,
+  period_type: r.period_type,
+  start_date: r.start_date,
+  end_date: r.end_date,
+  target_amount: r.target_amount,
+  set_by_user_id: r.set_by_user_id,
+  active: r.active,
+  created_at: r.created_at,
+  synced: true,
+});
+
 // ---------------------------------------------------------------------------
 // Push: send local unsynced rows up to Supabase, then mark them synced.
 // ---------------------------------------------------------------------------
@@ -311,6 +338,14 @@ async function pushUnsyncedAssets() {
   await db.fixedAssets.bulkUpdate(rows.map((r) => ({ key: r.asset_id, changes: { synced: true } })));
 }
 
+async function pushUnsyncedSalesTargets() {
+  const rows = await db.salesTargets.filter((t) => t.synced === false).toArray();
+  if (rows.length === 0) return;
+  const { error } = await supabase.from('sales_targets').upsert(rows.map(salesTargetToRow));
+  if (error) throw error;
+  await db.salesTargets.bulkUpdate(rows.map((r) => ({ key: r.target_id, changes: { synced: true } })));
+}
+
 /** Push every table's pending local changes up to Supabase. */
 export async function pushAll() {
   if (!isSupabaseConfigured) return;
@@ -324,50 +359,92 @@ export async function pushAll() {
     pushUnsyncedUsers(),
     pushUnsyncedRecipes(),
     pushUnsyncedAssets(),
+    pushUnsyncedSalesTargets(),
   ]);
 }
 
 // ---------------------------------------------------------------------------
 // Deletes — Dexie tables don't queue offline deletes, so these push straight
-// to Supabase. Call them right after the matching local db.<table>.delete().
-// If the device is offline when a delete happens, other devices won't see it
-// until this is called again while online (no retry queue yet).
+// to Supabase. Every one of these returns a boolean: the caller MUST await
+// it and only delete the local Dexie row on `true`. Deleting locally first
+// and firing the remote delete without awaiting it (the old pattern here)
+// hides real failures — e.g. a blocked foreign key — from the user: the row
+// vanishes from the screen but is still on the server, then reappears the
+// next time this device pulls. If the device is offline when a delete
+// happens, other devices won't see it until this is called again while
+// online (no retry queue yet) — surface that to the user too.
 // ---------------------------------------------------------------------------
 
-export async function deleteUserRemote(userId: string) {
-  if (!isSupabaseConfigured || !navigator.onLine) return;
+export async function deleteUserRemote(userId: string): Promise<boolean> {
+  if (!isSupabaseConfigured) return true; // nothing to sync, just do the local delete
+  if (!navigator.onLine) return false;
   const { error } = await supabase.from('users').delete().eq('user_id', userId);
-  if (error) console.error('[Garomax] delete user remote error', error);
+  if (error) {
+    console.error('[Garomax] delete user remote error', error);
+    return false;
+  }
+  return true;
 }
 
-export async function deleteIngredientRemote(ingredientId: string) {
-  if (!isSupabaseConfigured || !navigator.onLine) return;
+export async function deleteIngredientRemote(ingredientId: string): Promise<boolean> {
+  if (!isSupabaseConfigured) return true;
+  if (!navigator.onLine) return false;
   // ingredient_stock rows cascade-delete in Postgres (on delete cascade), so
   // only the definition row needs an explicit delete here.
   const { error } = await supabase.from('ingredients').delete().eq('ingredient_id', ingredientId);
-  if (error) console.error('[Garomax] delete ingredient remote error', error);
+  if (error) {
+    console.error('[Garomax] delete ingredient remote error', error);
+    return false;
+  }
+  return true;
 }
 
-export async function deleteRecipeDishRemote(dishName: string) {
-  if (!isSupabaseConfigured || !navigator.onLine) return;
+export async function deleteRecipeDishRemote(dishName: string): Promise<boolean> {
+  if (!isSupabaseConfigured) return true;
+  if (!navigator.onLine) return false;
   const { error } = await supabase.from('recipes').delete().eq('dish_name', dishName);
-  if (error) console.error('[Garomax] delete dish remote error', error);
+  if (error) {
+    console.error('[Garomax] delete dish remote error', error);
+    return false;
+  }
+  return true;
 }
 
-export async function deleteRecipeLineRemote(dishName: string, ingredientId: string) {
-  if (!isSupabaseConfigured || !navigator.onLine) return;
+export async function deleteRecipeLineRemote(dishName: string, ingredientId: string): Promise<boolean> {
+  if (!isSupabaseConfigured) return true;
+  if (!navigator.onLine) return false;
   const { error } = await supabase
     .from('recipes')
     .delete()
     .eq('dish_name', dishName)
     .eq('ingredient_id', ingredientId);
-  if (error) console.error('[Garomax] delete recipe line remote error', error);
+  if (error) {
+    console.error('[Garomax] delete recipe line remote error', error);
+    return false;
+  }
+  return true;
 }
 
-export async function deleteAssetRemote(assetId: string) {
-  if (!isSupabaseConfigured || !navigator.onLine) return;
+export async function deleteAssetRemote(assetId: string): Promise<boolean> {
+  if (!isSupabaseConfigured) return true;
+  if (!navigator.onLine) return false;
   const { error } = await supabase.from('fixed_assets').delete().eq('asset_id', assetId);
-  if (error) console.error('[Garomax] delete asset remote error', error);
+  if (error) {
+    console.error('[Garomax] delete asset remote error', error);
+    return false;
+  }
+  return true;
+}
+
+export async function deleteBranchRemote(branchId: string): Promise<boolean> {
+  if (!isSupabaseConfigured) return true;
+  if (!navigator.onLine) return false;
+  const { error } = await supabase.from('branches').delete().eq('branch_id', branchId);
+  if (error) {
+    console.error('[Garomax] delete branch remote error', error);
+    return false;
+  }
+  return true;
 }
 
 // ---------------------------------------------------------------------------
@@ -376,7 +453,7 @@ export async function deleteAssetRemote(assetId: string) {
 // ---------------------------------------------------------------------------
 
 async function pullAll() {
-  const [branches, users, ingredients, ingredientStock, recipes, orders, waste, ledgers, assets] = await Promise.all([
+  const [branches, users, ingredients, ingredientStock, recipes, orders, waste, ledgers, assets, targets] = await Promise.all([
     supabase.from('branches').select('*'),
     supabase.from('users').select('*'),
     supabase.from('ingredients').select('*'),
@@ -386,6 +463,7 @@ async function pullAll() {
     supabase.from('waste_logs').select('*'),
     supabase.from('staff_ledgers').select('*'),
     supabase.from('fixed_assets').select('*'),
+    supabase.from('sales_targets').select('*'),
   ]);
 
   if (branches.data?.length) await db.branches.bulkPut(branches.data.map(branchFromRow));
@@ -397,6 +475,7 @@ async function pullAll() {
   if (waste.data?.length) await db.wasteLogs.bulkPut(waste.data.map(wasteFromRow));
   if (ledgers.data?.length) await db.staffLedgers.bulkPut(ledgers.data.map(ledgerFromRow));
   if (assets.data?.length) await db.fixedAssets.bulkPut(assets.data.map(assetFromRow));
+  if (targets.data?.length) await db.salesTargets.bulkPut(targets.data.map(salesTargetFromRow));
 }
 
 // ---------------------------------------------------------------------------
@@ -474,6 +553,13 @@ function subscribeRealtime() {
         return;
       }
       db.fixedAssets.put(assetFromRow(payload.new));
+    })
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'sales_targets' }, (payload) => {
+      if (payload.eventType === 'DELETE') {
+        if (payload.old?.target_id) db.salesTargets.delete(payload.old.target_id);
+        return;
+      }
+      db.salesTargets.put(salesTargetFromRow(payload.new));
     })
     .subscribe();
 

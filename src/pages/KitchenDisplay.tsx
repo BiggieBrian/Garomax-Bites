@@ -3,6 +3,7 @@ import { useLiveQuery } from 'dexie-react-hooks';
 import { db } from '../db/kibandaDB';
 import { requestSync } from '../db/sync';
 import { useAuth } from '../context/AuthContext';
+import { SalesTargetBadge } from '../components/SalesTargetBadge';
 import { Check, Flame, Package, AlertTriangle, X } from 'lucide-react';
 import type { Ingredient, OrderItem, WasteReason } from '../types';
 
@@ -222,6 +223,8 @@ export const KitchenDisplay: React.FC = () => {
           <span className="block text-[9px] font-mono text-zinc-500 uppercase">QUEUED</span>
         </div>
       </div>
+
+      <SalesTargetBadge branchId={myBranchId} />
 
       {/* Log Waste / Spoilage */}
       <button
