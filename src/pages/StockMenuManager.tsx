@@ -273,6 +273,10 @@ export const StockMenuManager: React.FC = () => {
   };
 
   const handleRemoveDishLine = async (dish_name: string, ingredient_id: string, lineCount: number) => {
+    if (lineCount <= 1) {
+      setDishError('A dish needs at least one ingredient line — delete the whole dish instead.');
+      return;
+    }
     const ok = await deleteRecipeLineRemote(dish_name, ingredient_id);
     if (!ok) {
       setDishError('Could not remove that ingredient on the server — check your connection and try again.');

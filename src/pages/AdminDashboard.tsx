@@ -617,6 +617,52 @@ export const AdminDashboard: React.FC = () => {
           </div>
 
           <div className="relative bg-[#0f1117] border border-zinc-800/80 rounded-2xl p-4 shadow-xl space-y-3">
+            <div className="flex items-center justify-between border-b border-zinc-800/80 pb-2">
+              <div className="flex items-center gap-2">
+                <Receipt className="w-4 h-4 text-orange-400" />
+                <span className="font-mono text-xs font-bold text-zinc-300 uppercase tracking-wider">
+                  Top Items Sold
+                </span>
+              </div>
+            </div>
+
+            {sales.itemsSold.length === 0 ? (
+              <p className="text-zinc-600 text-[11px] font-mono text-center py-4">No items sold in this period</p>
+            ) : (
+              <>
+                <SearchInput
+                  value={itemsSearch}
+                  onChange={(v) => { setItemsSearch(v); setItemsPage(1); }}
+                  placeholder="Search items..."
+                />
+                {searchedItemsSold.length === 0 ? (
+                  <p className="text-zinc-600 text-[11px] font-mono text-center py-4">No items match your search</p>
+                ) : (
+                  <>
+                    <div className="space-y-2">
+                      {pagedItemsSold.map((it) => (
+                        <div
+                          key={it.dish_name}
+                          className="flex items-center justify-between bg-zinc-900/60 border border-zinc-800/60 rounded-xl p-2.5"
+                        >
+                          <div>
+                            <p className="text-xs font-medium text-white">{it.dish_name}</p>
+                            <p className="text-[9px] font-mono text-zinc-500 uppercase tracking-widest">
+                              {it.quantity} sold
+                            </p>
+                          </div>
+                          <span className="text-emerald-400 font-mono font-bold text-sm">{money(it.revenue)}</span>
+                        </div>
+                      ))}
+                    </div>
+                    <Pagination page={itemsPage} totalPages={itemsTotalPages} onPageChange={setItemsPage} />
+                  </>
+                )}
+              </>
+            )}
+          </div>
+
+          <div className="relative bg-[#0f1117] border border-zinc-800/80 rounded-2xl p-4 shadow-xl space-y-3">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">
                 <Package className="w-4 h-4 text-orange-400" />
@@ -640,6 +686,8 @@ export const AdminDashboard: React.FC = () => {
               <p className="text-zinc-600 text-[11px] font-mono text-center py-2">All stock levels healthy</p>
             )}
           </div>
+
+          <SalesTargetManager branchId={myBranchId} />
         </div>
       )}
 
@@ -647,6 +695,9 @@ export const AdminDashboard: React.FC = () => {
       {activeTab === 'stock' && <StockMenuManager />}
 
       {/* ===================== ASSETS TAB ===================== */}
+      {activeTab === 'assets' && <FixedAssetsManager />}
+
+      {/* ===================== SUPPLIES TAB ===================== */}
       {activeTab === 'supplies' && <SuppliesManager branchId={myBranchId} />}
 
       {/* ===================== STAFF TAB ===================== */}
@@ -715,6 +766,11 @@ export const AdminDashboard: React.FC = () => {
                       >
                         <Pencil className="w-3 h-3" />
                       </button>
+                      {!isSelf && isLastAdmin && (
+                        <span title="Last remaining admin — protected from deletion">
+                          <ShieldAlert className="w-3.5 h-3.5 text-amber-400" />
+                        </span>
+                      )}
                       {!isSelf && !isLastAdmin && (
                         <button
                           onClick={() => setConfirmDeleteStaff(s.user_id)}

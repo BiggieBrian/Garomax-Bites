@@ -122,303 +122,6 @@ vite.config.ts
 <files>
 This section contains the contents of the repository's files.
 
-<file path="src/components/SuppliesManager.tsx">
-import React, { useState } from 'react';
-import { useLiveQuery } from 'dexie-react-hooks';
-import { db } from '../db/kibandaDB';
-import { requestSync, deleteSupplyRemote } from '../db/sync';
-import type { Supply } from '../types';
-import { Boxes, Plus, RotateCcw, Trash2, X, AlertTriangle } from 'lucide-react';
-
-const money = (n: number) => `KES ${n.toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
-const todayIso = () => new Date().toISOString().slice(0, 10);
-
-function daysSince(dateIso: string): number {
-  const then = new Date(dateIso).getTime();
-  const now = new Date().getTime();
-  return Math.floor((now - then) / (1000 * 60 * 60 * 24));
-}
-
-/**
- * "Untrackable" consumables — oil, onions, tomatoes, gas, water — tracked by
- * restock cadence instead of an exact quantity, since nobody's measuring
- * grams of onion per plate. Admin taps "Mark Restocked" when they buy more;
- * the app just watches the calendar against the expected interval and flags
- * anything overdue, the same way low-stock warnings work for real ingredients.
- */
-export const SuppliesManager: React.FC<{ branchId: string | null }> = ({ branchId }) => {
-  const allSupplies = useLiveQuery(() => db.supplies.toArray(), []) ?? [];
-  const supplies = allSupplies
-    .filter((s) => s.branch_id === branchId)
-    .sort((a, b) => a.name.localeCompare(b.name));
-
-  // -------------------------------------------------------------------
-  // Add supply
-  // -------------------------------------------------------------------
-  const [showAddForm, setShowAddForm] = useState(false);
-  const [name, setName] = useState('');
-  const [unitLabel, setUnitLabel] = useState('');
-  const [intervalDays, setIntervalDays] = useState('7');
-  const [error, setError] = useState('');
-
-  const resetAddForm = () => {
-    setName('');
-    setUnitLabel('');
-    setIntervalDays('7');
-    setError('');
-  };
-
-  const handleAdd = async () => {
-    setError('');
-    if (!branchId) return setError('No branch selected.');
-    if (!name.trim()) return setError('Enter a name.');
-    const interval = parseInt(intervalDays, 10);
-    if (!interval || interval <= 0) return setError('Enter a restock interval greater than zero days.');
-
-    await db.supplies.add({
-      supply_id: crypto.randomUUID(),
-      branch_id: branchId,
-      name: name.trim(),
-      unit_label: unitLabel.trim() || 'unit',
-      restock_interval_days: interval,
-      synced: false,
-    });
-    requestSync();
-    resetAddForm();
-    setShowAddForm(false);
-  };
-
-  // -------------------------------------------------------------------
-  // Mark restocked — the one action this whole screen exists for.
-  // Optionally logs a cost, which feeds the Expenses/Profit numbers on
-  // the Overview tab.
-  // -------------------------------------------------------------------
-  const [restockingId, setRestockingId] = useState<string | null>(null);
-  const [restockCost, setRestockCost] = useState('');
-
-  const openRestock = (s: Supply) => {
-    setRestockingId(s.supply_id);
-    setRestockCost(s.last_restock_cost ? String(s.last_restock_cost) : '');
-  };
-
-  const confirmRestock = async (s: Supply) => {
-    const cost = restockCost.trim() ? parseFloat(restockCost) : undefined;
-    await db.supplies.update(s.supply_id, {
-      last_restocked_at: todayIso(),
-      last_restock_cost: cost !== undefined && !isNaN(cost) ? cost : s.last_restock_cost,
-      synced: false,
-    });
-    requestSync();
-    setRestockingId(null);
-    setRestockCost('');
-  };
-
-  // -------------------------------------------------------------------
-  // Delete
-  // -------------------------------------------------------------------
-  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
-  const [deleteError, setDeleteError] = useState('');
-
-  const handleDelete = async (s: Supply) => {
-    setDeleteError('');
-    const ok = await deleteSupplyRemote(s.supply_id);
-    if (!ok) {
-      setDeleteError('Could not delete on the server — check your connection and try again.');
-      setConfirmDeleteId(null);
-      return;
-    }
-    await db.supplies.delete(s.supply_id);
-    setConfirmDeleteId(null);
-  };
-
-  return (
-    <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <Boxes className="w-4 h-4 text-orange-400" />
-          <h2 className="text-sm font-bold text-white uppercase tracking-wider">Supplies</h2>
-        </div>
-        <button
-          onClick={() => setShowAddForm((v) => !v)}
-          className="flex items-center gap-1 text-xs font-medium bg-orange-500/10 text-orange-400 border border-orange-500/20 px-2.5 py-1.5 rounded-lg hover:bg-orange-500/20 transition active:scale-95"
-        >
-          <Plus className="w-3.5 h-3.5" />
-          Add Supply
-        </button>
-      </div>
-
-      <p className="text-[11px] font-mono text-zinc-500">
-        Oil, onions, tomatoes, gas, water — items too vague to portion per dish. Tracked by
-        restock date instead of quantity.
-      </p>
-
-      {showAddForm && (
-        <div className="bg-zinc-900/80 border border-zinc-800/80 rounded-xl p-3 space-y-2">
-          <input
-            autoFocus
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            placeholder="Name (e.g. Cooking Oil)"
-            className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-sm text-zinc-100 placeholder:text-zinc-600 focus:outline-none focus:border-orange-500/50"
-          />
-          <input
-            value={unitLabel}
-            onChange={(e) => setUnitLabel(e.target.value)}
-            placeholder="Unit (e.g. 5L jerrican, 13kg cylinder)"
-            className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-sm text-zinc-100 placeholder:text-zinc-600 focus:outline-none focus:border-orange-500/50"
-          />
-          <div>
-            <label className="text-[9px] font-mono text-zinc-500 uppercase tracking-widest mb-1 block">
-              Restock every (days)
-            </label>
-            <input
-              type="number"
-              inputMode="numeric"
-              value={intervalDays}
-              onChange={(e) => setIntervalDays(e.target.value)}
-              className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-sm text-zinc-100 focus:outline-none focus:border-orange-500/50"
-            />
-          </div>
-          {error && <p className="text-xs text-red-400">{error}</p>}
-          <div className="flex gap-2 pt-1">
-            <button
-              onClick={handleAdd}
-              className="flex-1 bg-orange-500 text-white text-xs font-bold py-2 rounded-lg hover:bg-orange-400 transition active:scale-95"
-            >
-              Save Supply
-            </button>
-            <button
-              onClick={() => {
-                resetAddForm();
-                setShowAddForm(false);
-              }}
-              className="px-3 text-xs text-zinc-400 hover:text-white"
-            >
-              Cancel
-            </button>
-          </div>
-        </div>
-      )}
-
-      {deleteError && <p className="text-xs text-red-400">{deleteError}</p>}
-
-      <div className="space-y-2">
-        {supplies.length === 0 && (
-          <p className="text-xs text-zinc-500 text-center py-6">
-            No supplies tracked yet — add oil, gas, or produce above.
-          </p>
-        )}
-
-        {supplies.map((s) => {
-          const overdueBy = s.last_restocked_at
-            ? daysSince(s.last_restocked_at) - s.restock_interval_days
-            : null;
-          const isOverdue = overdueBy !== null && overdueBy > 0;
-          const neverRestocked = !s.last_restocked_at;
-
-          return (
-            <div
-              key={s.supply_id}
-              className={`bg-zinc-900/80 border rounded-xl p-3 ${
-                isOverdue || neverRestocked ? 'border-red-500/30' : 'border-zinc-800/80'
-              }`}
-            >
-              {restockingId === s.supply_id ? (
-                <div className="space-y-2">
-                  <p className="text-xs text-zinc-300">
-                    Mark <span className="font-semibold text-white">{s.name}</span> restocked today?
-                  </p>
-                  <input
-                    type="number"
-                    inputMode="decimal"
-                    value={restockCost}
-                    onChange={(e) => setRestockCost(e.target.value)}
-                    placeholder="Cost this restock (KES) — optional"
-                    className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-sm text-zinc-100 placeholder:text-zinc-600 focus:outline-none focus:border-orange-500/50"
-                  />
-                  <div className="flex gap-2">
-                    <button
-                      onClick={() => confirmRestock(s)}
-                      className="flex-1 bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 text-xs font-bold py-2 rounded-lg hover:bg-emerald-500/20 transition"
-                    >
-                      Confirm
-                    </button>
-                    <button
-                      onClick={() => setRestockingId(null)}
-                      className="px-3 text-xs text-zinc-400 hover:text-white"
-                    >
-                      Cancel
-                    </button>
-                  </div>
-                </div>
-              ) : confirmDeleteId === s.supply_id ? (
-                <div className="flex items-center justify-between gap-2">
-                  <p className="text-xs text-red-300">Delete {s.name}?</p>
-                  <div className="flex gap-1.5 shrink-0">
-                    <button
-                      onClick={() => setConfirmDeleteId(null)}
-                      className="p-1.5 rounded-lg bg-zinc-800/80 hover:bg-zinc-800 text-zinc-400 hover:text-white transition"
-                    >
-                      <X className="w-3.5 h-3.5" />
-                    </button>
-                    <button
-                      onClick={() => handleDelete(s)}
-                      className="px-2.5 py-1.5 rounded-lg bg-red-500/10 border border-red-500/30 text-red-400 hover:bg-red-500/20 text-[11px] font-bold transition"
-                    >
-                      Confirm Delete
-                    </button>
-                  </div>
-                </div>
-              ) : (
-                <div className="flex items-center justify-between">
-                  <div>
-                    <p className="text-sm font-medium text-zinc-100">{s.name}</p>
-                    <p className="text-[10px] font-mono text-zinc-500 mt-0.5">
-                      {s.unit_label} · every {s.restock_interval_days}d
-                    </p>
-                    {neverRestocked ? (
-                      <p className="text-[10px] font-mono text-red-400 flex items-center gap-1 mt-1">
-                        <AlertTriangle className="w-3 h-3" /> Never marked restocked
-                      </p>
-                    ) : isOverdue ? (
-                      <p className="text-[10px] font-mono text-red-400 flex items-center gap-1 mt-1">
-                        <AlertTriangle className="w-3 h-3" /> Overdue by {overdueBy}d
-                        {s.last_restock_cost ? ` · last cost ${money(s.last_restock_cost)}` : ''}
-                      </p>
-                    ) : (
-                      <p className="text-[10px] font-mono text-zinc-500 mt-1">
-                        Last restocked {daysSince(s.last_restocked_at!)}d ago
-                        {s.last_restock_cost ? ` · ${money(s.last_restock_cost)}` : ''}
-                      </p>
-                    )}
-                  </div>
-                  <div className="flex gap-1.5 shrink-0">
-                    <button
-                      onClick={() => openRestock(s)}
-                      className="p-1.5 rounded-lg bg-orange-500/10 border border-orange-500/20 hover:bg-orange-500/20 text-orange-400 transition"
-                      title="Mark restocked today"
-                    >
-                      <RotateCcw className="w-3.5 h-3.5" />
-                    </button>
-                    <button
-                      onClick={() => { setDeleteError(''); setConfirmDeleteId(s.supply_id); }}
-                      className="p-1.5 rounded-lg bg-zinc-800/80 hover:bg-red-500/20 text-zinc-400 hover:text-red-400 transition"
-                      title="Delete"
-                    >
-                      <Trash2 className="w-3.5 h-3.5" />
-                    </button>
-                  </div>
-                </div>
-              )}
-            </div>
-          );
-        })}
-      </div>
-    </div>
-  );
-};
-</file>
-
 <file path="dev-dist/registerSW.js">
 if('serviceWorker' in navigator) navigator.serviceWorker.register('/dev-sw.js?dev-sw', { scope: '/', type: 'classic' })
 </file>
@@ -4512,6 +4215,303 @@ export const SearchInput: React.FC<SearchInputProps> = ({ value, onChange, place
 };
 </file>
 
+<file path="src/components/SuppliesManager.tsx">
+import React, { useState } from 'react';
+import { useLiveQuery } from 'dexie-react-hooks';
+import { db } from '../db/kibandaDB';
+import { requestSync, deleteSupplyRemote } from '../db/sync';
+import type { Supply } from '../types';
+import { Boxes, Plus, RotateCcw, Trash2, X, AlertTriangle } from 'lucide-react';
+
+const money = (n: number) => `KES ${n.toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
+const todayIso = () => new Date().toISOString().slice(0, 10);
+
+function daysSince(dateIso: string): number {
+  const then = new Date(dateIso).getTime();
+  const now = new Date().getTime();
+  return Math.floor((now - then) / (1000 * 60 * 60 * 24));
+}
+
+/**
+ * "Untrackable" consumables — oil, onions, tomatoes, gas, water — tracked by
+ * restock cadence instead of an exact quantity, since nobody's measuring
+ * grams of onion per plate. Admin taps "Mark Restocked" when they buy more;
+ * the app just watches the calendar against the expected interval and flags
+ * anything overdue, the same way low-stock warnings work for real ingredients.
+ */
+export const SuppliesManager: React.FC<{ branchId: string | null }> = ({ branchId }) => {
+  const allSupplies = useLiveQuery(() => db.supplies.toArray(), []) ?? [];
+  const supplies = allSupplies
+    .filter((s) => s.branch_id === branchId)
+    .sort((a, b) => a.name.localeCompare(b.name));
+
+  // -------------------------------------------------------------------
+  // Add supply
+  // -------------------------------------------------------------------
+  const [showAddForm, setShowAddForm] = useState(false);
+  const [name, setName] = useState('');
+  const [unitLabel, setUnitLabel] = useState('');
+  const [intervalDays, setIntervalDays] = useState('7');
+  const [error, setError] = useState('');
+
+  const resetAddForm = () => {
+    setName('');
+    setUnitLabel('');
+    setIntervalDays('7');
+    setError('');
+  };
+
+  const handleAdd = async () => {
+    setError('');
+    if (!branchId) return setError('No branch selected.');
+    if (!name.trim()) return setError('Enter a name.');
+    const interval = parseInt(intervalDays, 10);
+    if (!interval || interval <= 0) return setError('Enter a restock interval greater than zero days.');
+
+    await db.supplies.add({
+      supply_id: crypto.randomUUID(),
+      branch_id: branchId,
+      name: name.trim(),
+      unit_label: unitLabel.trim() || 'unit',
+      restock_interval_days: interval,
+      synced: false,
+    });
+    requestSync();
+    resetAddForm();
+    setShowAddForm(false);
+  };
+
+  // -------------------------------------------------------------------
+  // Mark restocked — the one action this whole screen exists for.
+  // Optionally logs a cost, which feeds the Expenses/Profit numbers on
+  // the Overview tab.
+  // -------------------------------------------------------------------
+  const [restockingId, setRestockingId] = useState<string | null>(null);
+  const [restockCost, setRestockCost] = useState('');
+
+  const openRestock = (s: Supply) => {
+    setRestockingId(s.supply_id);
+    setRestockCost(s.last_restock_cost ? String(s.last_restock_cost) : '');
+  };
+
+  const confirmRestock = async (s: Supply) => {
+    const cost = restockCost.trim() ? parseFloat(restockCost) : undefined;
+    await db.supplies.update(s.supply_id, {
+      last_restocked_at: todayIso(),
+      last_restock_cost: cost !== undefined && !isNaN(cost) ? cost : s.last_restock_cost,
+      synced: false,
+    });
+    requestSync();
+    setRestockingId(null);
+    setRestockCost('');
+  };
+
+  // -------------------------------------------------------------------
+  // Delete
+  // -------------------------------------------------------------------
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+  const [deleteError, setDeleteError] = useState('');
+
+  const handleDelete = async (s: Supply) => {
+    setDeleteError('');
+    const ok = await deleteSupplyRemote(s.supply_id);
+    if (!ok) {
+      setDeleteError('Could not delete on the server — check your connection and try again.');
+      setConfirmDeleteId(null);
+      return;
+    }
+    await db.supplies.delete(s.supply_id);
+    setConfirmDeleteId(null);
+  };
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <Boxes className="w-4 h-4 text-orange-400" />
+          <h2 className="text-sm font-bold text-white uppercase tracking-wider">Supplies</h2>
+        </div>
+        <button
+          onClick={() => setShowAddForm((v) => !v)}
+          className="flex items-center gap-1 text-xs font-medium bg-orange-500/10 text-orange-400 border border-orange-500/20 px-2.5 py-1.5 rounded-lg hover:bg-orange-500/20 transition active:scale-95"
+        >
+          <Plus className="w-3.5 h-3.5" />
+          Add Supply
+        </button>
+      </div>
+
+      <p className="text-[11px] font-mono text-zinc-500">
+        Oil, onions, tomatoes, gas, water — items too vague to portion per dish. Tracked by
+        restock date instead of quantity.
+      </p>
+
+      {showAddForm && (
+        <div className="bg-zinc-900/80 border border-zinc-800/80 rounded-xl p-3 space-y-2">
+          <input
+            autoFocus
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder="Name (e.g. Cooking Oil)"
+            className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-sm text-zinc-100 placeholder:text-zinc-600 focus:outline-none focus:border-orange-500/50"
+          />
+          <input
+            value={unitLabel}
+            onChange={(e) => setUnitLabel(e.target.value)}
+            placeholder="Unit (e.g. 5L jerrican, 13kg cylinder)"
+            className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-sm text-zinc-100 placeholder:text-zinc-600 focus:outline-none focus:border-orange-500/50"
+          />
+          <div>
+            <label className="text-[9px] font-mono text-zinc-500 uppercase tracking-widest mb-1 block">
+              Restock every (days)
+            </label>
+            <input
+              type="number"
+              inputMode="numeric"
+              value={intervalDays}
+              onChange={(e) => setIntervalDays(e.target.value)}
+              className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-sm text-zinc-100 focus:outline-none focus:border-orange-500/50"
+            />
+          </div>
+          {error && <p className="text-xs text-red-400">{error}</p>}
+          <div className="flex gap-2 pt-1">
+            <button
+              onClick={handleAdd}
+              className="flex-1 bg-orange-500 text-white text-xs font-bold py-2 rounded-lg hover:bg-orange-400 transition active:scale-95"
+            >
+              Save Supply
+            </button>
+            <button
+              onClick={() => {
+                resetAddForm();
+                setShowAddForm(false);
+              }}
+              className="px-3 text-xs text-zinc-400 hover:text-white"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+
+      {deleteError && <p className="text-xs text-red-400">{deleteError}</p>}
+
+      <div className="space-y-2">
+        {supplies.length === 0 && (
+          <p className="text-xs text-zinc-500 text-center py-6">
+            No supplies tracked yet — add oil, gas, or produce above.
+          </p>
+        )}
+
+        {supplies.map((s) => {
+          const overdueBy = s.last_restocked_at
+            ? daysSince(s.last_restocked_at) - s.restock_interval_days
+            : null;
+          const isOverdue = overdueBy !== null && overdueBy > 0;
+          const neverRestocked = !s.last_restocked_at;
+
+          return (
+            <div
+              key={s.supply_id}
+              className={`bg-zinc-900/80 border rounded-xl p-3 ${
+                isOverdue || neverRestocked ? 'border-red-500/30' : 'border-zinc-800/80'
+              }`}
+            >
+              {restockingId === s.supply_id ? (
+                <div className="space-y-2">
+                  <p className="text-xs text-zinc-300">
+                    Mark <span className="font-semibold text-white">{s.name}</span> restocked today?
+                  </p>
+                  <input
+                    type="number"
+                    inputMode="decimal"
+                    value={restockCost}
+                    onChange={(e) => setRestockCost(e.target.value)}
+                    placeholder="Cost this restock (KES) — optional"
+                    className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-sm text-zinc-100 placeholder:text-zinc-600 focus:outline-none focus:border-orange-500/50"
+                  />
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => confirmRestock(s)}
+                      className="flex-1 bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 text-xs font-bold py-2 rounded-lg hover:bg-emerald-500/20 transition"
+                    >
+                      Confirm
+                    </button>
+                    <button
+                      onClick={() => setRestockingId(null)}
+                      className="px-3 text-xs text-zinc-400 hover:text-white"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              ) : confirmDeleteId === s.supply_id ? (
+                <div className="flex items-center justify-between gap-2">
+                  <p className="text-xs text-red-300">Delete {s.name}?</p>
+                  <div className="flex gap-1.5 shrink-0">
+                    <button
+                      onClick={() => setConfirmDeleteId(null)}
+                      className="p-1.5 rounded-lg bg-zinc-800/80 hover:bg-zinc-800 text-zinc-400 hover:text-white transition"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                    <button
+                      onClick={() => handleDelete(s)}
+                      className="px-2.5 py-1.5 rounded-lg bg-red-500/10 border border-red-500/30 text-red-400 hover:bg-red-500/20 text-[11px] font-bold transition"
+                    >
+                      Confirm Delete
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-sm font-medium text-zinc-100">{s.name}</p>
+                    <p className="text-[10px] font-mono text-zinc-500 mt-0.5">
+                      {s.unit_label} · every {s.restock_interval_days}d
+                    </p>
+                    {neverRestocked ? (
+                      <p className="text-[10px] font-mono text-red-400 flex items-center gap-1 mt-1">
+                        <AlertTriangle className="w-3 h-3" /> Never marked restocked
+                      </p>
+                    ) : isOverdue ? (
+                      <p className="text-[10px] font-mono text-red-400 flex items-center gap-1 mt-1">
+                        <AlertTriangle className="w-3 h-3" /> Overdue by {overdueBy}d
+                        {s.last_restock_cost ? ` · last cost ${money(s.last_restock_cost)}` : ''}
+                      </p>
+                    ) : (
+                      <p className="text-[10px] font-mono text-zinc-500 mt-1">
+                        Last restocked {daysSince(s.last_restocked_at!)}d ago
+                        {s.last_restock_cost ? ` · ${money(s.last_restock_cost)}` : ''}
+                      </p>
+                    )}
+                  </div>
+                  <div className="flex gap-1.5 shrink-0">
+                    <button
+                      onClick={() => openRestock(s)}
+                      className="p-1.5 rounded-lg bg-orange-500/10 border border-orange-500/20 hover:bg-orange-500/20 text-orange-400 transition"
+                      title="Mark restocked today"
+                    >
+                      <RotateCcw className="w-3.5 h-3.5" />
+                    </button>
+                    <button
+                      onClick={() => { setDeleteError(''); setConfirmDeleteId(s.supply_id); }}
+                      className="p-1.5 rounded-lg bg-zinc-800/80 hover:bg-red-500/20 text-zinc-400 hover:text-red-400 transition"
+                      title="Delete"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+};
+</file>
+
 <file path="src/components/usePagination.ts">
 import { useState } from 'react';
 
@@ -6596,6 +6596,174 @@ export async function seedInitialData() {
 }
 </file>
 
+<file path="src/App.tsx">
+import React, { useState } from 'react';
+import { AuthProvider, useAuth } from './context/AuthContext';
+import { Login } from './pages/Login';
+import { WaiterPOS } from './pages/WaiterPOS';
+import { KitchenDisplay } from './pages/KitchenDisplay';
+import { AdminDashboard } from './pages/AdminDashboard';
+import { SuperAdminDashboard } from './pages/SuperAdminDashboard';
+import { LogOut, Cloud, CloudOff, RefreshCw, AlertTriangle, Pencil, X } from 'lucide-react';
+import { useSyncStatus } from './hooks/useSyncStatus';
+
+const SyncBadge: React.FC = () => {
+  const { status, configured } = useSyncStatus();
+
+  if (!configured) {
+    return (
+      <div
+        title="Supabase not configured — running local-only, this device won't see other terminals"
+        className="flex items-center gap-1 text-zinc-500 bg-zinc-900/80 px-2 py-1.5 rounded-lg border border-zinc-800/80"
+      >
+        <CloudOff className="w-3.5 h-3.5" />
+      </div>
+    );
+  }
+
+  const config = {
+    offline: { icon: CloudOff, color: 'text-zinc-500', label: 'Offline — changes saved locally' },
+    syncing: { icon: RefreshCw, color: 'text-orange-400 animate-spin', label: 'Syncing…' },
+    synced: { icon: Cloud, color: 'text-emerald-400', label: 'Synced' },
+    error: { icon: AlertTriangle, color: 'text-red-400', label: 'Sync error — retrying' },
+  }[status];
+
+  const Icon = config.icon;
+
+  return (
+    <div
+      title={config.label}
+      className="flex items-center gap-1 bg-zinc-900/80 px-2 py-1.5 rounded-lg border border-zinc-800/80"
+    >
+      <Icon className={`w-3.5 h-3.5 ${config.color}`} />
+    </div>
+  );
+};
+
+const DashboardSwitch: React.FC = () => {
+  const { currentUser, logout, updateOwnName } = useAuth();
+  const [showNameEdit, setShowNameEdit] = useState(false);
+  const [nameInput, setNameInput] = useState('');
+
+  if (!currentUser) {
+    return <Login />;
+  }
+
+  const openNameEdit = () => {
+    setNameInput(currentUser.name);
+    setShowNameEdit(true);
+  };
+
+  const saveName = async () => {
+    await updateOwnName(nameInput);
+    setShowNameEdit(false);
+  };
+
+  return (
+    <div className="min-h-screen bg-[#090a0f] text-zinc-100 font-sans selection:bg-orange-500 selection:text-white">
+      {/* PayRoller-Inspired Minimal Dark Header */}
+      <header className="bg-[#0f1117]/90 backdrop-blur-md border-b border-zinc-800/80 px-4 py-3 sticky top-0 z-50">
+        <div className="max-w-md mx-auto flex items-center justify-between">
+          {/* Logo Brand */}
+          <div className="flex items-center space-x-2">
+            <div>
+              <div className="flex items-center gap-1.5">
+                <span className="font-extrabold text-white text-base tracking-wider uppercase font-mono">
+                  GAROMAX
+                </span>
+                <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-mono font-bold bg-orange-500/10 text-orange-400 border border-orange-500/20 uppercase tracking-widest">
+                  {currentUser.role}
+                </span>
+              </div>
+            </div>
+          </div>
+
+          {/* User Profile, Sync Status & Logout */}
+          <div className="flex items-center gap-2">
+            <SyncBadge />
+            <button
+              onClick={openNameEdit}
+              title="Edit display name"
+              className="flex items-center text-xs text-zinc-300 font-mono bg-zinc-900/80 px-2.5 py-1.5 rounded-xl border border-zinc-800/80 hover:border-orange-500/40 transition"
+            >
+              <span className="w-1.5 h-1.5 rounded-full bg-orange-500 mr-2 animate-pulse" />
+              <span className="truncate max-w-[100px] font-medium">{currentUser.name}</span>
+              <Pencil className="w-3 h-3 ml-1.5 text-zinc-500" />
+            </button>
+            <button
+              onClick={logout}
+              className="p-1.5 rounded-xl bg-zinc-900 hover:bg-zinc-800 text-zinc-400 hover:text-white transition active:scale-95 border border-zinc-800"
+              title="Log Out"
+            >
+              <LogOut className="w-4 h-4" />
+            </button>
+          </div>
+        </div>
+      </header>
+
+      {/* Main Content Area */}
+      <main className="p-4 max-w-md mx-auto">
+        {currentUser.role === 'waiter' && <WaiterPOS />}
+
+        {currentUser.role === 'cook' && <KitchenDisplay/>}
+
+        {currentUser.role === 'admin' && <AdminDashboard />}
+
+        {currentUser.role === 'superadmin' && <SuperAdminDashboard />}
+      </main>
+
+      {/* Edit Display Name Modal */}
+      {showNameEdit && (
+        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/70 backdrop-blur-sm p-4">
+          <div className="relative w-full max-w-sm bg-[#0f1117] border border-zinc-800 rounded-3xl p-5 shadow-2xl space-y-4">
+            <div className="flex items-center justify-between">
+              <h3 className="font-mono text-xs font-bold text-white uppercase tracking-wider">
+                Edit Display Name
+              </h3>
+              <button
+                onClick={() => setShowNameEdit(false)}
+                className="p-1.5 rounded-lg bg-zinc-900 hover:bg-zinc-800 text-zinc-400 border border-zinc-800"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
+
+            <div>
+              <label className="text-[10px] font-mono text-zinc-500 uppercase tracking-widest mb-1 block">
+                Name
+              </label>
+              <input
+                type="text"
+                value={nameInput}
+                onChange={(e) => setNameInput(e.target.value)}
+                placeholder="e.g. Jane Wanjiru"
+                className="w-full bg-zinc-950 border border-zinc-700 rounded-xl px-3 py-2.5 text-sm text-white font-mono focus:outline-none focus:border-orange-500"
+              />
+            </div>
+
+            <button
+              onClick={saveName}
+              disabled={!nameInput.trim()}
+              className="w-full py-3.5 bg-orange-500 hover:bg-orange-400 disabled:opacity-40 disabled:pointer-events-none active:scale-[0.98] text-zinc-950 font-mono font-bold uppercase tracking-wider text-xs rounded-2xl transition shadow-lg shadow-orange-500/20"
+            >
+              Save
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
+export default function App() {
+  return (
+    <AuthProvider>
+      <DashboardSwitch />
+    </AuthProvider>
+  );
+}
+</file>
+
 <file path="src/pages/KitchenDisplay.tsx">
 import React, { useMemo, useState } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
@@ -7047,172 +7215,531 @@ export const KitchenDisplay: React.FC = () => {
         };
 </file>
 
-<file path="src/App.tsx">
+<file path="src/pages/WaiterPOS.tsx">
 import React, { useState } from 'react';
-import { AuthProvider, useAuth } from './context/AuthContext';
-import { Login } from './pages/Login';
-import { WaiterPOS } from './pages/WaiterPOS';
-import { KitchenDisplay } from './pages/KitchenDisplay';
-import { AdminDashboard } from './pages/AdminDashboard';
-import { SuperAdminDashboard } from './pages/SuperAdminDashboard';
-import { LogOut, Cloud, CloudOff, RefreshCw, AlertTriangle, Pencil, X } from 'lucide-react';
-import { useSyncStatus } from './hooks/useSyncStatus';
+import { useLiveQuery } from 'dexie-react-hooks';
+import { db } from '../db/kibandaDB';
+import { requestSync } from '../db/sync';
+import { supabase, isSupabaseConfigured } from '../lib/supabase';
+import { useAuth } from '../context/AuthContext';
+import { SalesTargetBadge } from '../components/SalesTargetBadge';
+import type { Order, OrderItem, PaymentMethod } from '../types';
+import { Plus, Minus, Send, Clock, CheckCircle, ShoppingBag, Flame, ChefHat, Mail, MessageSquareText, X } from 'lucide-react';
 
-const SyncBadge: React.FC = () => {
-  const { status, configured } = useSyncStatus();
+export const WaiterPOS: React.FC = () => {
+  const { currentUser } = useAuth();
+  
+  // Navigation tab for mobile view
+  const [activeTab, setActiveTab] = useState<'menu' | 'pending'>('menu');
 
-  if (!configured) {
-    return (
-      <div
-        title="Supabase not configured — running local-only, this device won't see other terminals"
-        className="flex items-center gap-1 text-zinc-500 bg-zinc-900/80 px-2 py-1.5 rounded-lg border border-zinc-800/80"
-      >
-        <CloudOff className="w-3.5 h-3.5" />
-      </div>
-    );
-  }
-
-  const config = {
-    offline: { icon: CloudOff, color: 'text-zinc-500', label: 'Offline — changes saved locally' },
-    syncing: { icon: RefreshCw, color: 'text-orange-400 animate-spin', label: 'Syncing…' },
-    synced: { icon: Cloud, color: 'text-emerald-400', label: 'Synced' },
-    error: { icon: AlertTriangle, color: 'text-red-400', label: 'Sync error — retrying' },
-  }[status];
-
-  const Icon = config.icon;
-
-  return (
-    <div
-      title={config.label}
-      className="flex items-center gap-1 bg-zinc-900/80 px-2 py-1.5 rounded-lg border border-zinc-800/80"
-    >
-      <Icon className={`w-3.5 h-3.5 ${config.color}`} />
-    </div>
+  // Live queries from Dexie DB
+  const recipes = useLiveQuery(() => db.recipes.toArray(), []);
+  const myBranchId = currentUser?.branch_id ?? null;
+  const allActiveOrders = useLiveQuery(() => 
+    db.orders.where('payment_status').equals('active').reverse().toArray(), []
   );
-};
+  const activeOrders = allActiveOrders?.filter((o) => o.branch_id === myBranchId);
 
-const DashboardSwitch: React.FC = () => {
-  const { currentUser, logout, updateOwnName } = useAuth();
-  const [showNameEdit, setShowNameEdit] = useState(false);
-  const [nameInput, setNameInput] = useState('');
+  // Get unique list of dishes from recipe mappings
+  const dishes = Array.from(
+    new Map(recipes?.map((r) => [r.dish_name, r])).values()
+  );
 
-  if (!currentUser) {
-    return <Login />;
-  }
+  // Cart state
+  const [cart, setCart] = useState<OrderItem[]>([]);
 
-  const openNameEdit = () => {
-    setNameInput(currentUser.name);
-    setShowNameEdit(true);
+  // Settlement / receipt drawer state for pending orders — only one drawer
+  // open per card at a time, independent of whichever kitchen_status the
+  // ticket is currently in.
+  const [activeDrawer, setActiveDrawer] = useState<{ orderId: string; mode: 'payment' | 'receipt' } | null>(null);
+  const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('cash');
+  const [mpesaCode, setMpesaCode] = useState('');
+  const [receiptChannel, setReceiptChannel] = useState<'email' | 'phone'>('email');
+  const [receiptContact, setReceiptContact] = useState('');
+
+  // Add dish to cart
+  const addToCart = (dishName: string, price: number) => {
+    setCart((prev) => {
+      const existing = prev.find((item) => item.dish_name === dishName);
+      if (existing) {
+        return prev.map((item) =>
+          item.dish_name === dishName
+            ? { ...item, quantity: item.quantity + 1 }
+            : item
+        );
+      }
+      return [...prev, { dish_name: dishName, quantity: 1, unit_price: price }];
+    });
   };
 
-  const saveName = async () => {
-    await updateOwnName(nameInput);
-    setShowNameEdit(false);
+  // Adjust item quantity
+  const updateQuantity = (dishName: string, delta: number) => {
+    setCart((prev) =>
+      prev
+        .map((item) => {
+          if (item.dish_name === dishName) {
+            const newQty = item.quantity + delta;
+            return newQty > 0 ? { ...item, quantity: newQty } : null;
+          }
+          return item;
+        })
+        .filter(Boolean) as OrderItem[]
+    );
+  };
+
+  const totalAmount = cart.reduce((sum, item) => sum + item.unit_price * item.quantity, 0);
+
+  // Send Order to Kitchen (Strictly Active/Unpaid)
+  const handleSendToKitchen = async () => {
+    if (cart.length === 0 || !currentUser?.branch_id) return;
+
+    const newOrder = {
+      order_id: crypto.randomUUID(),
+      branch_id: currentUser.branch_id,
+      payment_status: 'active' as const,
+      kitchen_status: 'queued' as const,
+      items: cart,
+      total_amount: totalAmount,
+      placed_by_waiter_id: currentUser.user_id,
+      timestamp: new Date().toISOString(),
+      synced: false,
+    };
+
+    await db.orders.add(newOrder);
+    requestSync();
+
+    // Reset cart state after sending ticket
+    setCart([]);
+  };
+
+  // Settle Payment after the customer finishes eating. A credit sale isn't
+  // collected yet, so it gets its own payment_status — the admin dashboard's
+  // Credit / Tabs section is where it later gets marked collected or written off.
+  const handleConfirmSettlement = async (orderId: string) => {
+    await db.orders.update(orderId, {
+      payment_status: paymentMethod === 'credit' ? 'credit' : 'paid',
+      payment_method: paymentMethod,
+      mpesa_code: paymentMethod === 'mpesa' ? mpesaCode : undefined,
+      synced: false,
+    });
+    requestSync();
+
+    setActiveDrawer(null);
+    setMpesaCode('');
+    setPaymentMethod('cash');
+  };
+
+  // Build a plain-text receipt for a ticket
+  const buildReceiptText = (order: Order) => {
+    const lines = [
+      'GAROMAX BITES',
+      `Ticket #${order.order_id.slice(0, 6)}`,
+      new Date(order.timestamp).toLocaleString(),
+      '',
+      ...order.items.map(
+        (it) => `${it.quantity}x ${it.dish_name}  —  KES ${it.unit_price * it.quantity}`
+      ),
+      '',
+      `TOTAL: KES ${order.total_amount}`,
+      '',
+      'Thank you for dining with us!',
+    ];
+    return lines.join('\n');
+  };
+
+  // Send receipt via the send-receipt Edge Function (Resend under the hood).
+  // Falls back to nothing actionable if Supabase isn't configured — email
+  // sending needs a live backend, unlike the rest of this local-first app.
+  const [sendingReceipt, setSendingReceipt] = useState(false);
+  const [receiptSendError, setReceiptSendError] = useState('');
+
+  const handleSendReceipt = async (order: Order) => {
+    if (!receiptContact.trim()) return;
+
+    if (receiptChannel === 'email') {
+      if (!isSupabaseConfigured) {
+        setReceiptSendError('Supabase isn\'t configured on this device — can\'t send email.');
+        return;
+      }
+      setSendingReceipt(true);
+      setReceiptSendError('');
+      try {
+        const { error } = await supabase.functions.invoke('send-receipt', {
+          body: {
+            to: receiptContact.trim(),
+            subject: `Garomax Bites Receipt — #${order.order_id.slice(0, 6)}`,
+            text: buildReceiptText(order),
+          },
+        });
+        if (error) throw error;
+      } catch (err) {
+        setSendingReceipt(false);
+        setReceiptSendError(err instanceof Error ? err.message : 'Could not send receipt — try again.');
+        return;
+      }
+      setSendingReceipt(false);
+    }
+
+    setActiveDrawer(null);
+    setReceiptContact('');
+    setReceiptChannel('email');
   };
 
   return (
-    <div className="min-h-screen bg-[#090a0f] text-zinc-100 font-sans selection:bg-orange-500 selection:text-white">
-      {/* PayRoller-Inspired Minimal Dark Header */}
-      <header className="bg-[#0f1117]/90 backdrop-blur-md border-b border-zinc-800/80 px-4 py-3 sticky top-0 z-50">
-        <div className="max-w-md mx-auto flex items-center justify-between">
-          {/* Logo Brand */}
-          <div className="flex items-center space-x-2">
-            <div>
-              <div className="flex items-center gap-1.5">
-                <span className="font-extrabold text-white text-base tracking-wider uppercase font-mono">
-                  GAROMAX
+    <div className="pb-20 max-w-md mx-auto">
+      <SalesTargetBadge branchId={myBranchId} />
+      {/* PayRoller-Style Segmented Navigation Switcher */}
+      <div className="flex bg-[#0f1117] p-1 rounded-2xl border border-zinc-800/80 mb-5 shadow-lg">
+        <button
+          onClick={() => setActiveTab('menu')}
+          className={`flex-1 py-2.5 rounded-xl font-mono text-[11px] font-bold tracking-wider uppercase transition flex items-center justify-center gap-2 ${
+            activeTab === 'menu'
+              ? 'bg-orange-500 text-zinc-950 shadow-md shadow-orange-500/20'
+              : 'text-zinc-400 hover:text-white'
+          }`}
+        >
+          <ShoppingBag className="w-3.5 h-3.5" /> TAKE ORDER
+        </button>
+        <button
+          onClick={() => setActiveTab('pending')}
+          className={`flex-1 py-2.5 rounded-xl font-mono text-[11px] font-bold tracking-wider uppercase transition flex items-center justify-center gap-2 ${
+            activeTab === 'pending'
+              ? 'bg-orange-500 text-zinc-950 shadow-md shadow-orange-500/20'
+              : 'text-zinc-400 hover:text-white'
+          }`}
+        >
+          <Clock className="w-3.5 h-3.5" /> PENDING BILLS
+          {activeOrders && activeOrders.length > 0 && (
+            <span className="ml-1 bg-zinc-900 text-orange-400 border border-orange-500/30 font-mono text-[10px] px-1.5 py-0.2 rounded-full">
+              {activeOrders.length}
+            </span>
+          )}
+        </button>
+      </div>
+
+      {/* TAB 1: MENU & ORDER ENTRY */}
+      {activeTab === 'menu' && (
+        <div className="space-y-4">
+          {/* Menu Grid */}
+          <div className="grid grid-cols-2 gap-3">
+            {dishes.map((dish) => (
+              <button
+                key={dish.dish_name}
+                onClick={() => addToCart(dish.dish_name, dish.selling_price)}
+                className="group relative p-4 bg-[#0f1117] border border-zinc-800/80 hover:border-orange-500/50 rounded-2xl text-left transition-all active:scale-[0.98] shadow-md flex flex-col justify-between h-28 overflow-hidden"
+              >
+                {/* PayRoller Corner Accent */}
+                <div className="absolute top-1.5 left-1.5 w-1.5 h-1.5 border-t border-l border-zinc-700 group-hover:border-orange-500 transition-colors" />
+                <div className="absolute top-1.5 right-1.5 w-1.5 h-1.5 border-t border-r border-zinc-700 group-hover:border-orange-500 transition-colors" />
+
+                <span className="font-semibold text-white text-sm tracking-tight line-clamp-2 mt-1">
+                  {dish.dish_name}
                 </span>
-                <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-mono font-bold bg-orange-500/10 text-orange-400 border border-orange-500/20 uppercase tracking-widest">
-                  {currentUser.role}
+                <div className="flex justify-between items-end">
+                  <span className="text-orange-400 font-mono font-bold text-xs tracking-wider">
+                    KES {dish.selling_price}
+                  </span>
+                  <span className="text-[10px] font-mono text-zinc-500 uppercase tracking-widest">
+                    ADD +
+                  </span>
+                </div>
+              </button>
+            ))}
+          </div>
+
+          {/* Cart Tray (Appears when items are selected) */}
+          {cart.length > 0 && (
+            <div className="relative mt-6 bg-[#0f1117] border border-zinc-800/80 rounded-3xl p-4 shadow-2xl space-y-3">
+              {/* PayRoller Corner Accents */}
+              <div className="absolute top-2 left-2 w-2 h-2 border-t-2 border-l-2 border-orange-500/40" />
+              <div className="absolute top-2 right-2 w-2 h-2 border-t-2 border-r-2 border-orange-500/40" />
+
+              <div className="flex justify-between items-center pb-2 border-b border-zinc-800/80">
+                <span className="font-mono text-xs font-bold text-zinc-400 uppercase tracking-wider">
+                  ORDER SUMMARY
+                </span>
+                <button
+                  onClick={() => setCart([])}
+                  className="text-zinc-500 hover:text-red-400 font-mono text-[10px] uppercase tracking-wider"
+                >
+                  CLEAR
+                </button>
+              </div>
+
+              <div className="space-y-2 max-h-48 overflow-y-auto pr-1">
+                {cart.map((item) => (
+                  <div
+                    key={item.dish_name}
+                    className="flex items-center justify-between bg-zinc-900/60 p-2.5 rounded-xl border border-zinc-800/60"
+                  >
+                    <div>
+                      <p className="font-medium text-white text-xs">{item.dish_name}</p>
+                      <p className="text-[10px] text-zinc-400 font-mono">
+                        KES {item.unit_price * item.quantity}
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={() => updateQuantity(item.dish_name, -1)}
+                        className="p-1 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-300"
+                      >
+                        <Minus className="w-3 h-3" />
+                      </button>
+                      <span className="font-mono font-bold text-orange-400 text-xs w-4 text-center">
+                        {item.quantity}
+                      </span>
+                      <button
+                        onClick={() => addToCart(item.dish_name, item.unit_price)}
+                        className="p-1 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-300"
+                      >
+                        <Plus className="w-3 h-3" />
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              <div className="pt-2 border-t border-zinc-800/80 flex justify-between items-center">
+                <span className="text-zinc-400 font-mono text-xs uppercase tracking-wider">
+                  TOTAL AMOUNT
+                </span>
+                <span className="text-orange-400 font-mono font-bold text-base tracking-wider">
+                  KES {totalAmount}
                 </span>
               </div>
-            </div>
-          </div>
 
-          {/* User Profile, Sync Status & Logout */}
-          <div className="flex items-center gap-2">
-            <SyncBadge />
-            <button
-              onClick={openNameEdit}
-              title="Edit display name"
-              className="flex items-center text-xs text-zinc-300 font-mono bg-zinc-900/80 px-2.5 py-1.5 rounded-xl border border-zinc-800/80 hover:border-orange-500/40 transition"
-            >
-              <span className="w-1.5 h-1.5 rounded-full bg-orange-500 mr-2 animate-pulse" />
-              <span className="truncate max-w-[100px] font-medium">{currentUser.name}</span>
-              <Pencil className="w-3 h-3 ml-1.5 text-zinc-500" />
-            </button>
-            <button
-              onClick={logout}
-              className="p-1.5 rounded-xl bg-zinc-900 hover:bg-zinc-800 text-zinc-400 hover:text-white transition active:scale-95 border border-zinc-800"
-              title="Log Out"
-            >
-              <LogOut className="w-4 h-4" />
-            </button>
-          </div>
-        </div>
-      </header>
-
-      {/* Main Content Area */}
-      <main className="p-4 max-w-md mx-auto">
-        {currentUser.role === 'waiter' && <WaiterPOS />}
-
-        {currentUser.role === 'cook' && <KitchenDisplay/>}
-
-        {currentUser.role === 'admin' && <AdminDashboard />}
-
-        {currentUser.role === 'superadmin' && <SuperAdminDashboard />}
-      </main>
-
-      {/* Edit Display Name Modal */}
-      {showNameEdit && (
-        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/70 backdrop-blur-sm p-4">
-          <div className="relative w-full max-w-sm bg-[#0f1117] border border-zinc-800 rounded-3xl p-5 shadow-2xl space-y-4">
-            <div className="flex items-center justify-between">
-              <h3 className="font-mono text-xs font-bold text-white uppercase tracking-wider">
-                Edit Display Name
-              </h3>
+              {/* Action Button */}
               <button
-                onClick={() => setShowNameEdit(false)}
-                className="p-1.5 rounded-lg bg-zinc-900 hover:bg-zinc-800 text-zinc-400 border border-zinc-800"
+                onClick={handleSendToKitchen}
+                className="w-full py-3.5 bg-orange-500 hover:bg-orange-400 active:scale-[0.98] text-zinc-950 font-mono font-bold uppercase tracking-wider text-xs rounded-2xl transition flex items-center justify-center gap-2 shadow-lg shadow-orange-500/20"
               >
-                <X className="w-3.5 h-3.5" />
+                <Send className="w-4 h-4" /> SEND TICKET TO KITCHEN
               </button>
             </div>
+          )}
+        </div>
+      )}
 
-            <div>
-              <label className="text-[10px] font-mono text-zinc-500 uppercase tracking-widest mb-1 block">
-                Name
-              </label>
-              <input
-                type="text"
-                value={nameInput}
-                onChange={(e) => setNameInput(e.target.value)}
-                placeholder="e.g. Jane Wanjiru"
-                className="w-full bg-zinc-950 border border-zinc-700 rounded-xl px-3 py-2.5 text-sm text-white font-mono focus:outline-none focus:border-orange-500"
-              />
+      {/* TAB 2: PENDING UNPAID BILLS */}
+      {activeTab === 'pending' && (
+        <div className="space-y-3">
+          {!activeOrders || activeOrders.length === 0 ? (
+            <div className="relative text-center py-12 bg-[#0f1117] rounded-3xl border border-zinc-800/80 p-6 shadow-xl">
+              <CheckCircle className="w-10 h-10 text-orange-500 mx-auto mb-2 opacity-80" />
+              <p className="text-white font-mono font-bold text-xs uppercase tracking-wider">
+                ALL TABLES CLEARED
+              </p>
+              <p className="text-zinc-500 text-[11px] font-mono mt-1">NO ACTIVE UNPAID MEALS LOGGED</p>
             </div>
+          ) : (
+            activeOrders.map((order) => {
+              const drawerMode = activeDrawer?.orderId === order.order_id ? activeDrawer.mode : null;
+              const isReady = order.kitchen_status === 'ready';
 
-            <button
-              onClick={saveName}
-              disabled={!nameInput.trim()}
-              className="w-full py-3.5 bg-orange-500 hover:bg-orange-400 disabled:opacity-40 disabled:pointer-events-none active:scale-[0.98] text-zinc-950 font-mono font-bold uppercase tracking-wider text-xs rounded-2xl transition shadow-lg shadow-orange-500/20"
-            >
-              Save
-            </button>
-          </div>
+              return (
+                <div
+                  key={order.order_id}
+                  className="relative bg-[#0f1117] border border-zinc-800/80 rounded-2xl p-4 shadow-xl space-y-3"
+                >
+                  {/* PayRoller Corner Accents */}
+                  <div className="absolute top-1.5 left-1.5 w-1.5 h-1.5 border-t border-l border-zinc-700" />
+                  <div className="absolute top-1.5 right-1.5 w-1.5 h-1.5 border-t border-r border-zinc-700" />
+
+                  <div className="flex justify-between items-center border-b border-zinc-800/80 pb-2">
+                    <span className="text-[10px] text-zinc-400 font-mono uppercase tracking-widest">
+                      TIME: {new Date(order.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                    </span>
+                    <span className="text-orange-400 font-bold font-mono text-sm tracking-wider">
+                      KES {order.total_amount}
+                    </span>
+                  </div>
+
+                  {/* Kitchen status — independent of payment, purely informational for the waiter */}
+                  <div
+                    className={`flex items-center gap-1.5 w-fit px-2 py-1 rounded-lg border font-mono text-[10px] font-bold uppercase tracking-wider ${
+                      isReady
+                        ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400'
+                        : 'bg-orange-500/10 border-orange-500/30 text-orange-400'
+                    }`}
+                  >
+                    {isReady ? <ChefHat className="w-3 h-3" /> : <Flame className="w-3 h-3 animate-pulse" />}
+                    {isReady ? 'Ready to Serve' : 'Cooking'}
+                  </div>
+
+                  <div className="text-xs text-zinc-300 space-y-1 font-sans">
+                    {order.items.map((it, idx) => (
+                      <div key={idx} className="flex justify-between">
+                        <span className="font-medium text-zinc-200">
+                          {it.quantity}x {it.dish_name}
+                        </span>
+                        <span className="text-zinc-500 font-mono text-xs">
+                          KES {it.unit_price * it.quantity}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+
+                  {/* Settle Payment Drawer */}
+                  {drawerMode === 'payment' && (
+                    <div className="pt-3 border-t border-zinc-800/80 space-y-3 bg-zinc-900/80 p-3 rounded-xl">
+                      <p className="text-[11px] font-mono font-bold text-zinc-300 uppercase tracking-wider">
+                        SELECT PAYMENT METHOD:
+                      </p>
+                      <div className="grid grid-cols-3 gap-2">
+                        <button
+                          onClick={() => setPaymentMethod('cash')}
+                          className={`py-2 text-xs font-mono font-bold uppercase tracking-wider rounded-xl border transition ${
+                            paymentMethod === 'cash'
+                              ? 'bg-orange-500 text-zinc-950 border-orange-400'
+                              : 'bg-zinc-800 text-zinc-400 border-zinc-700'
+                          }`}
+                        >
+                          CASH
+                        </button>
+                        <button
+                          onClick={() => setPaymentMethod('mpesa')}
+                          className={`py-2 text-xs font-mono font-bold uppercase tracking-wider rounded-xl border transition ${
+                            paymentMethod === 'mpesa'
+                              ? 'bg-orange-500 text-zinc-950 border-orange-400'
+                              : 'bg-zinc-800 text-zinc-400 border-zinc-700'
+                          }`}
+                        >
+                          M-PESA
+                        </button>
+                        <button
+                          onClick={() => setPaymentMethod('credit')}
+                          className={`py-2 text-xs font-mono font-bold uppercase tracking-wider rounded-xl border transition ${
+                            paymentMethod === 'credit'
+                              ? 'bg-orange-500 text-zinc-950 border-orange-400'
+                              : 'bg-zinc-800 text-zinc-400 border-zinc-700'
+                          }`}
+                        >
+                          CREDIT
+                        </button>
+                      </div>
+
+                      {paymentMethod === 'mpesa' && (
+                        <input
+                          type="text"
+                          placeholder="M-PESA TRANSACTION CODE"
+                          value={mpesaCode}
+                          onChange={(e) => setMpesaCode(e.target.value.toUpperCase())}
+                          className="w-full bg-zinc-950 border border-zinc-700 rounded-xl px-3 py-2 text-xs text-white uppercase font-mono tracking-wider focus:outline-none focus:border-orange-500"
+                        />
+                      )}
+
+                      {paymentMethod === 'credit' && (
+                        <p className="text-[10px] font-mono text-zinc-500 leading-relaxed">
+                          This bill will move to the owner's Credit / Tabs list as outstanding —
+                          it isn't counted as collected revenue until it's settled there.
+                        </p>
+                      )}
+
+                      <div className="flex gap-2 pt-1">
+                        <button
+                          onClick={() => setActiveDrawer(null)}
+                          className="flex-1 py-2 bg-zinc-800 text-zinc-400 rounded-xl font-mono text-[11px] font-bold uppercase tracking-wider"
+                        >
+                          CANCEL
+                        </button>
+                        <button
+                          onClick={() => handleConfirmSettlement(order.order_id)}
+                          className="flex-1 py-2 bg-orange-500 text-zinc-950 rounded-xl font-mono text-[11px] font-bold uppercase tracking-wider shadow-lg shadow-orange-500/20"
+                        >
+                          {paymentMethod === 'credit' ? 'CONFIRM ON CREDIT' : 'CONFIRM PAID'}
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Send Receipt Drawer */}
+                  {drawerMode === 'receipt' && (
+                    <div className="pt-3 border-t border-zinc-800/80 space-y-3 bg-zinc-900/80 p-3 rounded-xl">
+                      <div className="flex items-center justify-between">
+                        <p className="text-[11px] font-mono font-bold text-zinc-300 uppercase tracking-wider">
+                          SEND RECEIPT VIA:
+                        </p>
+                        <button
+                          onClick={() => {
+                            setActiveDrawer(null);
+                            setReceiptContact('');
+                          }}
+                          className="text-zinc-500 hover:text-white"
+                        >
+                          <X className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-2">
+                        <button
+                          onClick={() => setReceiptChannel('email')}
+                          className={`py-2 text-xs font-mono font-bold uppercase tracking-wider rounded-xl border transition flex items-center justify-center gap-1.5 ${
+                            receiptChannel === 'email'
+                              ? 'bg-orange-500 text-zinc-950 border-orange-400'
+                              : 'bg-zinc-800 text-zinc-400 border-zinc-700'
+                          }`}
+                        >
+                          <Mail className="w-3.5 h-3.5" /> EMAIL
+                        </button>
+                        <button
+                          disabled
+                          title="Coming soon — SMS receipts"
+                          className="py-2 text-xs font-mono font-bold uppercase tracking-wider rounded-xl border bg-zinc-900 text-zinc-600 border-zinc-800 flex items-center justify-center gap-1.5 cursor-not-allowed"
+                        >
+                          <MessageSquareText className="w-3.5 h-3.5" /> SMS SOON
+                        </button>
+                      </div>
+
+                      <input
+                        type="email"
+                        placeholder="customer@email.com"
+                        value={receiptContact}
+                        onChange={(e) => setReceiptContact(e.target.value)}
+                        className="w-full bg-zinc-950 border border-zinc-700 rounded-xl px-3 py-2 text-xs text-white font-mono tracking-wide focus:outline-none focus:border-orange-500"
+                      />
+
+                      {receiptSendError && (
+                        <p className="text-[10px] font-mono text-red-400 bg-red-500/10 border border-red-500/20 rounded-lg px-2.5 py-2">
+                          {receiptSendError}
+                        </p>
+                      )}
+
+                      <button
+                        onClick={() => handleSendReceipt(order)}
+                        disabled={!receiptContact.trim() || sendingReceipt}
+                        className="w-full py-2.5 bg-orange-500 hover:bg-orange-400 disabled:opacity-40 disabled:pointer-events-none text-zinc-950 rounded-xl font-mono text-[11px] font-bold uppercase tracking-wider shadow-lg shadow-orange-500/20 flex items-center justify-center gap-1.5"
+                      >
+                        <Send className="w-3.5 h-3.5" /> {sendingReceipt ? 'SENDING…' : 'SEND RECEIPT'}
+                      </button>
+                    </div>
+                  )}
+
+                  {/* Action Buttons */}
+                  {!drawerMode && (
+                    <div className="grid grid-cols-2 gap-2">
+                      <button
+                        onClick={() => setActiveDrawer({ orderId: order.order_id, mode: 'receipt' })}
+                        className="py-2.5 bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 text-zinc-300 font-mono font-bold uppercase tracking-wider rounded-xl text-xs transition flex items-center justify-center gap-1.5"
+                      >
+                        <Mail className="w-3.5 h-3.5" /> RECEIPT
+                      </button>
+                      <button
+                        onClick={() => setActiveDrawer({ orderId: order.order_id, mode: 'payment' })}
+                        className="py-2.5 bg-orange-500/10 hover:bg-orange-500/20 border border-orange-500/30 text-orange-400 font-mono font-bold uppercase tracking-wider rounded-xl text-xs transition"
+                      >
+                        COLLECT & CLOSE
+                      </button>
+                    </div>
+                  )}
+                </div>
+              );
+            })
+          )}
         </div>
       )}
     </div>
   );
 };
-
-export default function App() {
-  return (
-    <AuthProvider>
-      <DashboardSwitch />
-    </AuthProvider>
-  );
-}
 </file>
 
 <file path="src/db/sync.ts">
@@ -8591,8 +9118,6 @@ export const StockMenuManager: React.FC = () => {
 
               <div>
                 <label className="text-[10px] font-mono text-zinc-500 uppercase tracking-widest mb-1 block">Unit</label>
-                <div>
-                <label className="text-[10px] font-mono text-zinc-500 uppercase tracking-widest mb-1 block">Unit</label>
                 <div className="grid grid-cols-5 gap-1.5">
                   {UNITS.map((u) => (
                     <button
@@ -8662,50 +9187,6 @@ export const StockMenuManager: React.FC = () => {
                   value={ingThreshold}
                   onChange={(e) => setIngThreshold(e.target.value)}
                   placeholder="e.g. 2"
-                  className="w-full bg-zinc-950 border border-zinc-700 rounded-xl px-3 py-2.5 text-xs text-white font-mono focus:outline-none focus:border-orange-500"
-                />
-              </div>
-              </div>
-
-              <div className="grid grid-cols-2 gap-2">
-                <div>
-                  <label className="text-[10px] font-mono text-zinc-500 uppercase tracking-widest mb-1 block">
-                    Starting Qty
-                  </label>
-                  <input
-                    type="number"
-                    inputMode="decimal"
-                    value={ingQty}
-                    onChange={(e) => setIngQty(e.target.value)}
-                    placeholder="0"
-                    className="w-full bg-zinc-950 border border-zinc-700 rounded-xl px-3 py-2.5 text-xs text-white font-mono focus:outline-none focus:border-orange-500"
-                  />
-                </div>
-                <div>
-                  <label className="text-[10px] font-mono text-zinc-500 uppercase tracking-widest mb-1 block">
-                    Cost / Unit (KES)
-                  </label>
-                  <input
-                    type="number"
-                    inputMode="decimal"
-                    value={ingCost}
-                    onChange={(e) => setIngCost(e.target.value)}
-                    placeholder="0"
-                    className="w-full bg-zinc-950 border border-zinc-700 rounded-xl px-3 py-2.5 text-xs text-white font-mono focus:outline-none focus:border-orange-500"
-                  />
-                </div>
-              </div>
-
-              <div>
-                <label className="text-[10px] font-mono text-zinc-500 uppercase tracking-widest mb-1 block">
-                  Low Stock Threshold
-                </label>
-                <input
-                  type="number"
-                  inputMode="decimal"
-                  value={ingThreshold}
-                  onChange={(e) => setIngThreshold(e.target.value)}
-                  placeholder="e.g. 5"
                   className="w-full bg-zinc-950 border border-zinc-700 rounded-xl px-3 py-2.5 text-xs text-white font-mono focus:outline-none focus:border-orange-500"
                 />
               </div>
@@ -8901,533 +9382,6 @@ export const StockMenuManager: React.FC = () => {
               Create Dish
             </button>
           </div>
-        </div>
-      )}
-    </div>
-  );
-};
-</file>
-
-<file path="src/pages/WaiterPOS.tsx">
-import React, { useState } from 'react';
-import { useLiveQuery } from 'dexie-react-hooks';
-import { db } from '../db/kibandaDB';
-import { requestSync } from '../db/sync';
-import { supabase, isSupabaseConfigured } from '../lib/supabase';
-import { useAuth } from '../context/AuthContext';
-import { SalesTargetBadge } from '../components/SalesTargetBadge';
-import type { Order, OrderItem, PaymentMethod } from '../types';
-import { Plus, Minus, Send, Clock, CheckCircle, ShoppingBag, Flame, ChefHat, Mail, MessageSquareText, X } from 'lucide-react';
-
-export const WaiterPOS: React.FC = () => {
-  const { currentUser } = useAuth();
-  
-  // Navigation tab for mobile view
-  const [activeTab, setActiveTab] = useState<'menu' | 'pending'>('menu');
-
-  // Live queries from Dexie DB
-  const recipes = useLiveQuery(() => db.recipes.toArray(), []);
-  const myBranchId = currentUser?.branch_id ?? null;
-  const allActiveOrders = useLiveQuery(() => 
-    db.orders.where('payment_status').equals('active').reverse().toArray(), []
-  );
-  const activeOrders = allActiveOrders?.filter((o) => o.branch_id === myBranchId);
-
-  // Get unique list of dishes from recipe mappings
-  const dishes = Array.from(
-    new Map(recipes?.map((r) => [r.dish_name, r])).values()
-  );
-
-  // Cart state
-  const [cart, setCart] = useState<OrderItem[]>([]);
-
-  // Settlement / receipt drawer state for pending orders — only one drawer
-  // open per card at a time, independent of whichever kitchen_status the
-  // ticket is currently in.
-  const [activeDrawer, setActiveDrawer] = useState<{ orderId: string; mode: 'payment' | 'receipt' } | null>(null);
-  const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('cash');
-  const [mpesaCode, setMpesaCode] = useState('');
-  const [receiptChannel, setReceiptChannel] = useState<'email' | 'phone'>('email');
-  const [receiptContact, setReceiptContact] = useState('');
-
-  // Add dish to cart
-  const addToCart = (dishName: string, price: number) => {
-    setCart((prev) => {
-      const existing = prev.find((item) => item.dish_name === dishName);
-      if (existing) {
-        return prev.map((item) =>
-          item.dish_name === dishName
-            ? { ...item, quantity: item.quantity + 1 }
-            : item
-        );
-      }
-      return [...prev, { dish_name: dishName, quantity: 1, unit_price: price }];
-    });
-  };
-
-  // Adjust item quantity
-  const updateQuantity = (dishName: string, delta: number) => {
-    setCart((prev) =>
-      prev
-        .map((item) => {
-          if (item.dish_name === dishName) {
-            const newQty = item.quantity + delta;
-            return newQty > 0 ? { ...item, quantity: newQty } : null;
-          }
-          return item;
-        })
-        .filter(Boolean) as OrderItem[]
-    );
-  };
-
-  const totalAmount = cart.reduce((sum, item) => sum + item.unit_price * item.quantity, 0);
-
-  // Send Order to Kitchen (Strictly Active/Unpaid)
-  const handleSendToKitchen = async () => {
-    if (cart.length === 0 || !currentUser?.branch_id) return;
-
-    const newOrder = {
-      order_id: crypto.randomUUID(),
-      branch_id: currentUser.branch_id,
-      payment_status: 'active' as const,
-      kitchen_status: 'queued' as const,
-      items: cart,
-      total_amount: totalAmount,
-      placed_by_waiter_id: currentUser.user_id,
-      timestamp: new Date().toISOString(),
-      synced: false,
-    };
-
-    await db.orders.add(newOrder);
-    requestSync();
-
-    // Reset cart state after sending ticket
-    setCart([]);
-  };
-
-  // Settle Payment after the customer finishes eating. A credit sale isn't
-  // collected yet, so it gets its own payment_status — the admin dashboard's
-  // Credit / Tabs section is where it later gets marked collected or written off.
-  const handleConfirmSettlement = async (orderId: string) => {
-    await db.orders.update(orderId, {
-      payment_status: paymentMethod === 'credit' ? 'credit' : 'paid',
-      payment_method: paymentMethod,
-      mpesa_code: paymentMethod === 'mpesa' ? mpesaCode : undefined,
-      synced: false,
-    });
-    requestSync();
-
-    setActiveDrawer(null);
-    setMpesaCode('');
-    setPaymentMethod('cash');
-  };
-
-  // Build a plain-text receipt for a ticket
-  const buildReceiptText = (order: Order) => {
-    const lines = [
-      'GAROMAX BITES',
-      `Ticket #${order.order_id.slice(0, 6)}`,
-      new Date(order.timestamp).toLocaleString(),
-      '',
-      ...order.items.map(
-        (it) => `${it.quantity}x ${it.dish_name}  —  KES ${it.unit_price * it.quantity}`
-      ),
-      '',
-      `TOTAL: KES ${order.total_amount}`,
-      '',
-      'Thank you for dining with us!',
-    ];
-    return lines.join('\n');
-  };
-
-  // Send receipt via the send-receipt Edge Function (Resend under the hood).
-  // Falls back to nothing actionable if Supabase isn't configured — email
-  // sending needs a live backend, unlike the rest of this local-first app.
-  const [sendingReceipt, setSendingReceipt] = useState(false);
-  const [receiptSendError, setReceiptSendError] = useState('');
-
-  const handleSendReceipt = async (order: Order) => {
-    if (!receiptContact.trim()) return;
-
-    if (receiptChannel === 'email') {
-      if (!isSupabaseConfigured) {
-        setReceiptSendError('Supabase isn\'t configured on this device — can\'t send email.');
-        return;
-      }
-      setSendingReceipt(true);
-      setReceiptSendError('');
-      try {
-        const { error } = await supabase.functions.invoke('send-receipt', {
-          body: {
-            to: receiptContact.trim(),
-            subject: `Garomax Bites Receipt — #${order.order_id.slice(0, 6)}`,
-            text: buildReceiptText(order),
-          },
-        });
-        if (error) throw error;
-      } catch (err) {
-        setSendingReceipt(false);
-        setReceiptSendError(err instanceof Error ? err.message : 'Could not send receipt — try again.');
-        return;
-      }
-      setSendingReceipt(false);
-    }
-
-    setActiveDrawer(null);
-    setReceiptContact('');
-    setReceiptChannel('email');
-  };
-
-  return (
-    <div className="pb-20 max-w-md mx-auto">
-      <SalesTargetBadge branchId={myBranchId} />
-      {/* PayRoller-Style Segmented Navigation Switcher */}
-      <div className="flex bg-[#0f1117] p-1 rounded-2xl border border-zinc-800/80 mb-5 shadow-lg">
-        <button
-          onClick={() => setActiveTab('menu')}
-          className={`flex-1 py-2.5 rounded-xl font-mono text-[11px] font-bold tracking-wider uppercase transition flex items-center justify-center gap-2 ${
-            activeTab === 'menu'
-              ? 'bg-orange-500 text-zinc-950 shadow-md shadow-orange-500/20'
-              : 'text-zinc-400 hover:text-white'
-          }`}
-        >
-          <ShoppingBag className="w-3.5 h-3.5" /> TAKE ORDER
-        </button>
-        <button
-          onClick={() => setActiveTab('pending')}
-          className={`flex-1 py-2.5 rounded-xl font-mono text-[11px] font-bold tracking-wider uppercase transition flex items-center justify-center gap-2 ${
-            activeTab === 'pending'
-              ? 'bg-orange-500 text-zinc-950 shadow-md shadow-orange-500/20'
-              : 'text-zinc-400 hover:text-white'
-          }`}
-        >
-          <Clock className="w-3.5 h-3.5" /> PENDING BILLS
-          {activeOrders && activeOrders.length > 0 && (
-            <span className="ml-1 bg-zinc-900 text-orange-400 border border-orange-500/30 font-mono text-[10px] px-1.5 py-0.2 rounded-full">
-              {activeOrders.length}
-            </span>
-          )}
-        </button>
-      </div>
-
-      {/* TAB 1: MENU & ORDER ENTRY */}
-      {activeTab === 'menu' && (
-        <div className="space-y-4">
-          {/* Menu Grid */}
-          <div className="grid grid-cols-2 gap-3">
-            {dishes.map((dish) => (
-              <button
-                key={dish.dish_name}
-                onClick={() => addToCart(dish.dish_name, dish.selling_price)}
-                className="group relative p-4 bg-[#0f1117] border border-zinc-800/80 hover:border-orange-500/50 rounded-2xl text-left transition-all active:scale-[0.98] shadow-md flex flex-col justify-between h-28 overflow-hidden"
-              >
-                {/* PayRoller Corner Accent */}
-                <div className="absolute top-1.5 left-1.5 w-1.5 h-1.5 border-t border-l border-zinc-700 group-hover:border-orange-500 transition-colors" />
-                <div className="absolute top-1.5 right-1.5 w-1.5 h-1.5 border-t border-r border-zinc-700 group-hover:border-orange-500 transition-colors" />
-
-                <span className="font-semibold text-white text-sm tracking-tight line-clamp-2 mt-1">
-                  {dish.dish_name}
-                </span>
-                <div className="flex justify-between items-end">
-                  <span className="text-orange-400 font-mono font-bold text-xs tracking-wider">
-                    KES {dish.selling_price}
-                  </span>
-                  <span className="text-[10px] font-mono text-zinc-500 uppercase tracking-widest">
-                    ADD +
-                  </span>
-                </div>
-              </button>
-            ))}
-          </div>
-
-          {/* Cart Tray (Appears when items are selected) */}
-          {cart.length > 0 && (
-            <div className="relative mt-6 bg-[#0f1117] border border-zinc-800/80 rounded-3xl p-4 shadow-2xl space-y-3">
-              {/* PayRoller Corner Accents */}
-              <div className="absolute top-2 left-2 w-2 h-2 border-t-2 border-l-2 border-orange-500/40" />
-              <div className="absolute top-2 right-2 w-2 h-2 border-t-2 border-r-2 border-orange-500/40" />
-
-              <div className="flex justify-between items-center pb-2 border-b border-zinc-800/80">
-                <span className="font-mono text-xs font-bold text-zinc-400 uppercase tracking-wider">
-                  ORDER SUMMARY
-                </span>
-                <button
-                  onClick={() => setCart([])}
-                  className="text-zinc-500 hover:text-red-400 font-mono text-[10px] uppercase tracking-wider"
-                >
-                  CLEAR
-                </button>
-              </div>
-
-              <div className="space-y-2 max-h-48 overflow-y-auto pr-1">
-                {cart.map((item) => (
-                  <div
-                    key={item.dish_name}
-                    className="flex items-center justify-between bg-zinc-900/60 p-2.5 rounded-xl border border-zinc-800/60"
-                  >
-                    <div>
-                      <p className="font-medium text-white text-xs">{item.dish_name}</p>
-                      <p className="text-[10px] text-zinc-400 font-mono">
-                        KES {item.unit_price * item.quantity}
-                      </p>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <button
-                        onClick={() => updateQuantity(item.dish_name, -1)}
-                        className="p-1 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-300"
-                      >
-                        <Minus className="w-3 h-3" />
-                      </button>
-                      <span className="font-mono font-bold text-orange-400 text-xs w-4 text-center">
-                        {item.quantity}
-                      </span>
-                      <button
-                        onClick={() => addToCart(item.dish_name, item.unit_price)}
-                        className="p-1 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-300"
-                      >
-                        <Plus className="w-3 h-3" />
-                      </button>
-                    </div>
-                  </div>
-                ))}
-              </div>
-
-              <div className="pt-2 border-t border-zinc-800/80 flex justify-between items-center">
-                <span className="text-zinc-400 font-mono text-xs uppercase tracking-wider">
-                  TOTAL AMOUNT
-                </span>
-                <span className="text-orange-400 font-mono font-bold text-base tracking-wider">
-                  KES {totalAmount}
-                </span>
-              </div>
-
-              {/* Action Button */}
-              <button
-                onClick={handleSendToKitchen}
-                className="w-full py-3.5 bg-orange-500 hover:bg-orange-400 active:scale-[0.98] text-zinc-950 font-mono font-bold uppercase tracking-wider text-xs rounded-2xl transition flex items-center justify-center gap-2 shadow-lg shadow-orange-500/20"
-              >
-                <Send className="w-4 h-4" /> SEND TICKET TO KITCHEN
-              </button>
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* TAB 2: PENDING UNPAID BILLS */}
-      {activeTab === 'pending' && (
-        <div className="space-y-3">
-          {!activeOrders || activeOrders.length === 0 ? (
-            <div className="relative text-center py-12 bg-[#0f1117] rounded-3xl border border-zinc-800/80 p-6 shadow-xl">
-              <CheckCircle className="w-10 h-10 text-orange-500 mx-auto mb-2 opacity-80" />
-              <p className="text-white font-mono font-bold text-xs uppercase tracking-wider">
-                ALL TABLES CLEARED
-              </p>
-              <p className="text-zinc-500 text-[11px] font-mono mt-1">NO ACTIVE UNPAID MEALS LOGGED</p>
-            </div>
-          ) : (
-            activeOrders.map((order) => {
-              const drawerMode = activeDrawer?.orderId === order.order_id ? activeDrawer.mode : null;
-              const isReady = order.kitchen_status === 'ready';
-
-              return (
-                <div
-                  key={order.order_id}
-                  className="relative bg-[#0f1117] border border-zinc-800/80 rounded-2xl p-4 shadow-xl space-y-3"
-                >
-                  {/* PayRoller Corner Accents */}
-                  <div className="absolute top-1.5 left-1.5 w-1.5 h-1.5 border-t border-l border-zinc-700" />
-                  <div className="absolute top-1.5 right-1.5 w-1.5 h-1.5 border-t border-r border-zinc-700" />
-
-                  <div className="flex justify-between items-center border-b border-zinc-800/80 pb-2">
-                    <span className="text-[10px] text-zinc-400 font-mono uppercase tracking-widest">
-                      TIME: {new Date(order.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                    </span>
-                    <span className="text-orange-400 font-bold font-mono text-sm tracking-wider">
-                      KES {order.total_amount}
-                    </span>
-                  </div>
-
-                  {/* Kitchen status — independent of payment, purely informational for the waiter */}
-                  <div
-                    className={`flex items-center gap-1.5 w-fit px-2 py-1 rounded-lg border font-mono text-[10px] font-bold uppercase tracking-wider ${
-                      isReady
-                        ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400'
-                        : 'bg-orange-500/10 border-orange-500/30 text-orange-400'
-                    }`}
-                  >
-                    {isReady ? <ChefHat className="w-3 h-3" /> : <Flame className="w-3 h-3 animate-pulse" />}
-                    {isReady ? 'Ready to Serve' : 'Cooking'}
-                  </div>
-
-                  <div className="text-xs text-zinc-300 space-y-1 font-sans">
-                    {order.items.map((it, idx) => (
-                      <div key={idx} className="flex justify-between">
-                        <span className="font-medium text-zinc-200">
-                          {it.quantity}x {it.dish_name}
-                        </span>
-                        <span className="text-zinc-500 font-mono text-xs">
-                          KES {it.unit_price * it.quantity}
-                        </span>
-                      </div>
-                    ))}
-                  </div>
-
-                  {/* Settle Payment Drawer */}
-                  {drawerMode === 'payment' && (
-                    <div className="pt-3 border-t border-zinc-800/80 space-y-3 bg-zinc-900/80 p-3 rounded-xl">
-                      <p className="text-[11px] font-mono font-bold text-zinc-300 uppercase tracking-wider">
-                        SELECT PAYMENT METHOD:
-                      </p>
-                      <div className="grid grid-cols-3 gap-2">
-                        <button
-                          onClick={() => setPaymentMethod('cash')}
-                          className={`py-2 text-xs font-mono font-bold uppercase tracking-wider rounded-xl border transition ${
-                            paymentMethod === 'cash'
-                              ? 'bg-orange-500 text-zinc-950 border-orange-400'
-                              : 'bg-zinc-800 text-zinc-400 border-zinc-700'
-                          }`}
-                        >
-                          CASH
-                        </button>
-                        <button
-                          onClick={() => setPaymentMethod('mpesa')}
-                          className={`py-2 text-xs font-mono font-bold uppercase tracking-wider rounded-xl border transition ${
-                            paymentMethod === 'mpesa'
-                              ? 'bg-orange-500 text-zinc-950 border-orange-400'
-                              : 'bg-zinc-800 text-zinc-400 border-zinc-700'
-                          }`}
-                        >
-                          M-PESA
-                        </button>
-                        <button
-                          onClick={() => setPaymentMethod('credit')}
-                          className={`py-2 text-xs font-mono font-bold uppercase tracking-wider rounded-xl border transition ${
-                            paymentMethod === 'credit'
-                              ? 'bg-orange-500 text-zinc-950 border-orange-400'
-                              : 'bg-zinc-800 text-zinc-400 border-zinc-700'
-                          }`}
-                        >
-                          CREDIT
-                        </button>
-                      </div>
-
-                      {paymentMethod === 'mpesa' && (
-                        <input
-                          type="text"
-                          placeholder="M-PESA TRANSACTION CODE"
-                          value={mpesaCode}
-                          onChange={(e) => setMpesaCode(e.target.value.toUpperCase())}
-                          className="w-full bg-zinc-950 border border-zinc-700 rounded-xl px-3 py-2 text-xs text-white uppercase font-mono tracking-wider focus:outline-none focus:border-orange-500"
-                        />
-                      )}
-
-                      {paymentMethod === 'credit' && (
-                        <p className="text-[10px] font-mono text-zinc-500 leading-relaxed">
-                          This bill will move to the owner's Credit / Tabs list as outstanding —
-                          it isn't counted as collected revenue until it's settled there.
-                        </p>
-                      )}
-
-                      <div className="flex gap-2 pt-1">
-                        <button
-                          onClick={() => setActiveDrawer(null)}
-                          className="flex-1 py-2 bg-zinc-800 text-zinc-400 rounded-xl font-mono text-[11px] font-bold uppercase tracking-wider"
-                        >
-                          CANCEL
-                        </button>
-                        <button
-                          onClick={() => handleConfirmSettlement(order.order_id)}
-                          className="flex-1 py-2 bg-orange-500 text-zinc-950 rounded-xl font-mono text-[11px] font-bold uppercase tracking-wider shadow-lg shadow-orange-500/20"
-                        >
-                          {paymentMethod === 'credit' ? 'CONFIRM ON CREDIT' : 'CONFIRM PAID'}
-                        </button>
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Send Receipt Drawer */}
-                  {drawerMode === 'receipt' && (
-                    <div className="pt-3 border-t border-zinc-800/80 space-y-3 bg-zinc-900/80 p-3 rounded-xl">
-                      <div className="flex items-center justify-between">
-                        <p className="text-[11px] font-mono font-bold text-zinc-300 uppercase tracking-wider">
-                          SEND RECEIPT VIA:
-                        </p>
-                        <button
-                          onClick={() => {
-                            setActiveDrawer(null);
-                            setReceiptContact('');
-                          }}
-                          className="text-zinc-500 hover:text-white"
-                        >
-                          <X className="w-3.5 h-3.5" />
-                        </button>
-                      </div>
-
-                      <div className="grid grid-cols-2 gap-2">
-                        <button
-                          onClick={() => setReceiptChannel('email')}
-                          className={`py-2 text-xs font-mono font-bold uppercase tracking-wider rounded-xl border transition flex items-center justify-center gap-1.5 ${
-                            receiptChannel === 'email'
-                              ? 'bg-orange-500 text-zinc-950 border-orange-400'
-                              : 'bg-zinc-800 text-zinc-400 border-zinc-700'
-                          }`}
-                        >
-                          <Mail className="w-3.5 h-3.5" /> EMAIL
-                        </button>
-                        <button
-                          disabled
-                          title="Coming soon — SMS receipts"
-                          className="py-2 text-xs font-mono font-bold uppercase tracking-wider rounded-xl border bg-zinc-900 text-zinc-600 border-zinc-800 flex items-center justify-center gap-1.5 cursor-not-allowed"
-                        >
-                          <MessageSquareText className="w-3.5 h-3.5" /> SMS SOON
-                        </button>
-                      </div>
-
-                      <input
-                        type="email"
-                        placeholder="customer@email.com"
-                        value={receiptContact}
-                        onChange={(e) => setReceiptContact(e.target.value)}
-                        className="w-full bg-zinc-950 border border-zinc-700 rounded-xl px-3 py-2 text-xs text-white font-mono tracking-wide focus:outline-none focus:border-orange-500"
-                      />
-
-                      {receiptSendError && (
-                        <p className="text-[10px] font-mono text-red-400 bg-red-500/10 border border-red-500/20 rounded-lg px-2.5 py-2">
-                          {receiptSendError}
-                        </p>
-                      )}
-
-                      <button
-                        onClick={() => handleSendReceipt(order)}
-                        disabled={!receiptContact.trim() || sendingReceipt}
-                        className="w-full py-2.5 bg-orange-500 hover:bg-orange-400 disabled:opacity-40 disabled:pointer-events-none text-zinc-950 rounded-xl font-mono text-[11px] font-bold uppercase tracking-wider shadow-lg shadow-orange-500/20 flex items-center justify-center gap-1.5"
-                      >
-                        <Send className="w-3.5 h-3.5" /> {sendingReceipt ? 'SENDING…' : 'SEND RECEIPT'}
-                      </button>
-                    </div>
-                  )}
-
-                  {/* Action Buttons */}
-                  {!drawerMode && (
-                    <div className="grid grid-cols-2 gap-2">
-                      <button
-                        onClick={() => setActiveDrawer({ orderId: order.order_id, mode: 'receipt' })}
-                        className="py-2.5 bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 text-zinc-300 font-mono font-bold uppercase tracking-wider rounded-xl text-xs transition flex items-center justify-center gap-1.5"
-                      >
-                        <Mail className="w-3.5 h-3.5" /> RECEIPT
-                      </button>
-                      <button
-                        onClick={() => setActiveDrawer({ orderId: order.order_id, mode: 'payment' })}
-                        className="py-2.5 bg-orange-500/10 hover:bg-orange-500/20 border border-orange-500/30 text-orange-400 font-mono font-bold uppercase tracking-wider rounded-xl text-xs transition"
-                      >
-                        COLLECT & CLOSE
-                      </button>
-                    </div>
-                  )}
-                </div>
-              );
-            })
-          )}
         </div>
       )}
     </div>
@@ -10773,7 +10727,7 @@ export const AdminDashboard: React.FC = () => {
 
       {/* ===================== BOTTOM TAB BAR ===================== */}
       <nav className="fixed bottom-0 left-0 right-0 z-50 bg-[#0f1117]/95 backdrop-blur-md border-t border-zinc-800/80">
-        <div className="max-w-md mx-auto grid grid-cols-5">
+        <div className="max-w-md mx-auto grid grid-cols-6">
           {TABS.map((t) => {
             const Icon = t.icon;
             const isActive = activeTab === t.id;
