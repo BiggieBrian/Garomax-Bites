@@ -997,7 +997,7 @@ export const AdminDashboard: React.FC = () => {
 
       {/* ===================== BOTTOM TAB BAR ===================== */}
       <nav className="fixed bottom-0 left-0 right-0 z-50 bg-[#0f1117]/95 backdrop-blur-md border-t border-zinc-800/80">
-        <div className="max-w-md mx-auto grid grid-cols-5">
+        <div className="max-w-md mx-auto grid grid-cols-6">
           {TABS.map((t) => {
             const Icon = t.icon;
             const isActive = activeTab === t.id;
