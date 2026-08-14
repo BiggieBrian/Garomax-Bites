@@ -10,6 +10,7 @@ import type {
   StaffLedger,
   FixedAsset,
   SalesTarget,
+  Supply,
 } from '../types';
 
 export class KibandaDatabase extends Dexie {
@@ -23,6 +24,7 @@ export class KibandaDatabase extends Dexie {
   staffLedgers!: Table<StaffLedger>;
   fixedAssets!: Table<FixedAsset>;
   salesTargets!: Table<SalesTarget>;
+  supplies!: Table<Supply>;
 
   constructor() {
     super('GaromaxBitesDB');
@@ -128,7 +130,7 @@ export class KibandaDatabase extends Dexie {
       fixedAssets: 'asset_id, branch_id, category, synced',
     });
 
-   // v6: admin-set sales targets (daily/weekly/monthly), scoped per branch.
+    // v6: admin-set sales targets (daily/weekly/monthly), scoped per branch.
     this.version(6).stores({
       salesTargets: 'target_id, branch_id, period_type, active, synced',
     });
@@ -140,6 +142,12 @@ export class KibandaDatabase extends Dexie {
     // version bump instead of editing v6 above.
     this.version(7).stores({
       salesTargets: 'target_id, branch_id, period_type, active, synced, created_at',
+    });
+
+    // v8: "untrackable" consumables (oil, onions, gas...) tracked by restock
+    // cadence rather than exact stock count.
+    this.version(8).stores({
+      supplies: 'supply_id, branch_id, synced',
     });
   }
 }

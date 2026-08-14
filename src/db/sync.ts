@@ -11,6 +11,7 @@ import type {
   StaffLedger,
   FixedAsset,
   SalesTarget,
+  Supply,
 } from '../types';
 
 export type SyncStatus = 'offline' | 'syncing' | 'synced' | 'error';
@@ -139,6 +140,7 @@ const ingredientToRow = (i: Ingredient) => ({
   ingredient_id: i.ingredient_id,
   name: i.name,
   unit: i.unit,
+  bag_unit_label: i.bag_unit_label ?? null,
 });
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -146,10 +148,12 @@ const ingredientFromRow = (r: any): Ingredient => ({
   ingredient_id: r.ingredient_id,
   name: r.name,
   unit: r.unit,
+  bag_unit_label: r.bag_unit_label ?? undefined,
   synced: true,
 });
 
-// Stock levels are per-branch.
+// Stock levels are per-branch. `quantity_on_hand` is a bag count now (can be
+// fractional); `last_purchase_cost` is cost per bag, refreshed on restock.
 const ingredientStockToRow = (s: IngredientStock) => ({
   branch_id: s.branch_id,
   ingredient_id: s.ingredient_id,
@@ -190,11 +194,14 @@ const userFromRow = (r: any): User => ({
   synced: true,
 });
 
+// `servings_per_bag` — "one bag of this ingredient makes N plates of this
+// dish." Nullable: a dish can go live before every ingredient's yield is
+// known: see the skip-and-flag handling in KitchenDisplay.tsx.
 const recipeToRow = (r: RecipeItem) => ({
   dish_name: r.dish_name,
   ingredient_id: r.ingredient_id,
   selling_price: r.selling_price,
-  quantity_per_plate: r.quantity_per_plate,
+  servings_per_bag: r.servings_per_bag ?? null,
 });
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -202,7 +209,7 @@ const recipeFromRow = (r: any): RecipeItem => ({
   dish_name: r.dish_name,
   ingredient_id: r.ingredient_id,
   selling_price: r.selling_price,
-  quantity_per_plate: r.quantity_per_plate,
+  servings_per_bag: r.servings_per_bag ?? undefined,
   synced: true,
 });
 
@@ -253,6 +260,30 @@ const salesTargetFromRow = (r: any): SalesTarget => ({
   set_by_user_id: r.set_by_user_id,
   active: r.active,
   created_at: r.created_at,
+  synced: true,
+});
+
+const supplyToRow = (s: Supply) => ({
+  supply_id: s.supply_id,
+  branch_id: s.branch_id,
+  name: s.name,
+  unit_label: s.unit_label,
+  restock_interval_days: s.restock_interval_days,
+  last_restocked_at: s.last_restocked_at ?? null,
+  last_restock_cost: s.last_restock_cost ?? null,
+  notes: s.notes ?? null,
+});
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const supplyFromRow = (r: any): Supply => ({
+  supply_id: r.supply_id,
+  branch_id: r.branch_id,
+  name: r.name,
+  unit_label: r.unit_label,
+  restock_interval_days: r.restock_interval_days,
+  last_restocked_at: r.last_restocked_at ?? undefined,
+  last_restock_cost: r.last_restock_cost ?? undefined,
+  notes: r.notes ?? undefined,
   synced: true,
 });
 
@@ -346,6 +377,14 @@ async function pushUnsyncedSalesTargets() {
   await db.salesTargets.bulkUpdate(rows.map((r) => ({ key: r.target_id, changes: { synced: true } })));
 }
 
+async function pushUnsyncedSupplies() {
+  const rows = await db.supplies.filter((s) => s.synced === false).toArray();
+  if (rows.length === 0) return;
+  const { error } = await supabase.from('supplies').upsert(rows.map(supplyToRow));
+  if (error) throw error;
+  await db.supplies.bulkUpdate(rows.map((r) => ({ key: r.supply_id, changes: { synced: true } })));
+}
+
 /** Push every table's pending local changes up to Supabase. */
 export async function pushAll() {
   if (!isSupabaseConfigured) return;
@@ -360,6 +399,7 @@ export async function pushAll() {
     pushUnsyncedRecipes(),
     pushUnsyncedAssets(),
     pushUnsyncedSalesTargets(),
+    pushUnsyncedSupplies(),
   ]);
 }
 
@@ -447,13 +487,24 @@ export async function deleteBranchRemote(branchId: string): Promise<boolean> {
   return true;
 }
 
+export async function deleteSupplyRemote(supplyId: string): Promise<boolean> {
+  if (!isSupabaseConfigured) return true;
+  if (!navigator.onLine) return false;
+  const { error } = await supabase.from('supplies').delete().eq('supply_id', supplyId);
+  if (error) {
+    console.error('[Garomax] delete supply remote error', error);
+    return false;
+  }
+  return true;
+}
+
 // ---------------------------------------------------------------------------
 // Pull: bring remote rows down into Dexie (used on startup and via realtime).
 // Every device pulls every branch — see the note at the top of this file.
 // ---------------------------------------------------------------------------
 
 async function pullAll() {
-  const [branches, users, ingredients, ingredientStock, recipes, orders, waste, ledgers, assets, targets] = await Promise.all([
+  const [branches, users, ingredients, ingredientStock, recipes, orders, waste, ledgers, assets, targets, supplies] = await Promise.all([
     supabase.from('branches').select('*'),
     supabase.from('users').select('*'),
     supabase.from('ingredients').select('*'),
@@ -464,6 +515,7 @@ async function pullAll() {
     supabase.from('staff_ledgers').select('*'),
     supabase.from('fixed_assets').select('*'),
     supabase.from('sales_targets').select('*'),
+    supabase.from('supplies').select('*'),
   ]);
 
   if (branches.data?.length) await db.branches.bulkPut(branches.data.map(branchFromRow));
@@ -476,6 +528,7 @@ async function pullAll() {
   if (ledgers.data?.length) await db.staffLedgers.bulkPut(ledgers.data.map(ledgerFromRow));
   if (assets.data?.length) await db.fixedAssets.bulkPut(assets.data.map(assetFromRow));
   if (targets.data?.length) await db.salesTargets.bulkPut(targets.data.map(salesTargetFromRow));
+  if (supplies.data?.length) await db.supplies.bulkPut(supplies.data.map(supplyFromRow));
 }
 
 // ---------------------------------------------------------------------------
@@ -560,6 +613,13 @@ function subscribeRealtime() {
         return;
       }
       db.salesTargets.put(salesTargetFromRow(payload.new));
+    })
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'supplies' }, (payload) => {
+      if (payload.eventType === 'DELETE') {
+        if (payload.old?.supply_id) db.supplies.delete(payload.old.supply_id);
+        return;
+      }
+      db.supplies.put(supplyFromRow(payload.new));
     })
     .subscribe();
 

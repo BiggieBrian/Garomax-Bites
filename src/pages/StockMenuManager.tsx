@@ -82,12 +82,21 @@ export const StockMenuManager: React.FC = () => {
     return usage;
   }, [recipes]);
 
+  const incompleteDishNames = useMemo(() => {
+    const names = new Set<string>();
+    (recipes ?? []).forEach((r) => {
+      if (!r.servings_per_bag || r.servings_per_bag <= 0) names.add(r.dish_name);
+    });
+    return names;
+  }, [recipes]);
+
   // -------------------------------------------------------------------
   // Add ingredient
   // -------------------------------------------------------------------
   const [showIngredientForm, setShowIngredientForm] = useState(false);
   const [ingName, setIngName] = useState('');
   const [ingUnit, setIngUnit] = useState<Ingredient['unit']>('kg');
+  const [ingBagUnitLabel, setIngBagUnitLabel] = useState('');
   const [ingQty, setIngQty] = useState('');
   const [ingCost, setIngCost] = useState('');
   const [ingThreshold, setIngThreshold] = useState('');
@@ -96,6 +105,7 @@ export const StockMenuManager: React.FC = () => {
   const resetIngredientForm = () => {
     setIngName('');
     setIngUnit('kg');
+    setIngBagUnitLabel('');
     setIngQty('');
     setIngCost('');
     setIngThreshold('');
@@ -109,15 +119,15 @@ export const StockMenuManager: React.FC = () => {
     const qty = parseFloat(ingQty);
     const cost = parseFloat(ingCost);
     const threshold = parseFloat(ingThreshold);
-    if (isNaN(qty) || qty < 0) return setIngError('Enter a valid starting quantity.');
-    if (isNaN(cost) || cost < 0) return setIngError('Enter a valid purchase cost.');
-    if (isNaN(threshold) || threshold < 0) return setIngError('Enter a valid low-stock threshold.');
-
+    if (isNaN(qty) || qty < 0) return setIngError('Enter a valid starting bag count.');
+    if (isNaN(cost) || cost < 0) return setIngError('Enter a valid cost per bag.');
+    if (isNaN(threshold) || threshold < 0) return setIngError('Enter a valid low-stock threshold (in bags).');
     const ingredient_id = crypto.randomUUID();
     await db.ingredients.add({
       ingredient_id,
       name: ingName.trim(),
       unit: ingUnit,
+      bag_unit_label: ingBagUnitLabel.trim() || undefined,
       synced: false,
     });
     await db.ingredientStock.add({
@@ -179,19 +189,19 @@ export const StockMenuManager: React.FC = () => {
   const [showDishForm, setShowDishForm] = useState(false);
   const [dishName, setDishName] = useState('');
   const [dishPrice, setDishPrice] = useState('');
-  const [dishLines, setDishLines] = useState<{ ingredient_id: string; quantity_per_plate: string }[]>([
-    { ingredient_id: '', quantity_per_plate: '' },
+  const [dishLines, setDishLines] = useState<{ ingredient_id: string; servings_per_bag: string }[]>([
+    { ingredient_id: '', servings_per_bag: '' },
   ]);
   const [dishError, setDishError] = useState('');
 
   const resetDishForm = () => {
     setDishName('');
     setDishPrice('');
-    setDishLines([{ ingredient_id: '', quantity_per_plate: '' }]);
+    setDishLines([{ ingredient_id: '', servings_per_bag: '' }]);
     setDishError('');
   };
 
-  const updateDishLine = (idx: number, field: 'ingredient_id' | 'quantity_per_plate', value: string) => {
+  const updateDishLine = (idx: number, field: 'ingredient_id' | 'servings_per_bag', value: string) => {
     setDishLines((prev) => prev.map((l, i) => (i === idx ? { ...l, [field]: value } : l)));
   };
 
@@ -204,13 +214,13 @@ export const StockMenuManager: React.FC = () => {
     const price = parseFloat(dishPrice);
     if (isNaN(price) || price <= 0) return setDishError('Enter a valid selling price.');
 
-    const validLines = dishLines.filter((l) => l.ingredient_id && l.quantity_per_plate);
+    const validLines = dishLines.filter((l) => l.ingredient_id);
     if (validLines.length === 0) return setDishError('Add at least one ingredient.');
     const ids = validLines.map((l) => l.ingredient_id);
     if (new Set(ids).size !== ids.length) return setDishError('Each ingredient can only appear once per dish.');
     for (const l of validLines) {
-      if (isNaN(parseFloat(l.quantity_per_plate)) || parseFloat(l.quantity_per_plate) <= 0) {
-        return setDishError('Enter a valid quantity for every ingredient line.');
+      if (l.servings_per_bag.trim() && (isNaN(parseFloat(l.servings_per_bag)) || parseFloat(l.servings_per_bag) <= 0)) {
+        return setDishError('Servings per bag must be a positive number, or left blank if not known yet.');
       }
     }
 
@@ -219,7 +229,7 @@ export const StockMenuManager: React.FC = () => {
         dish_name: name,
         selling_price: price,
         ingredient_id: l.ingredient_id,
-        quantity_per_plate: parseFloat(l.quantity_per_plate),
+        servings_per_bag: l.servings_per_bag.trim() ? parseFloat(l.servings_per_bag) : undefined,
         synced: false,
       }))
     );
@@ -279,13 +289,13 @@ export const StockMenuManager: React.FC = () => {
   const [newLineQty, setNewLineQty] = useState('');
 
   const handleAddLineToDish = async (dish_name: string, selling_price: number) => {
-    const qty = parseFloat(newLineQty);
-    if (!newLineIngredient || isNaN(qty) || qty <= 0) return;
+   if (!newLineIngredient) return;
+    if (newLineQty.trim() && (isNaN(parseFloat(newLineQty)) || parseFloat(newLineQty) <= 0)) return;
     await db.recipes.put({
       dish_name,
       ingredient_id: newLineIngredient,
       selling_price,
-      quantity_per_plate: qty,
+      servings_per_bag: newLineQty.trim() ? parseFloat(newLineQty) : undefined,
       synced: false,
     });
     requestSync();
@@ -368,7 +378,8 @@ export const StockMenuManager: React.FC = () => {
                       <div>
                         <p className="text-xs font-medium text-white">{ing.name}</p>
                         <p className="text-[10px] font-mono text-zinc-500">
-                          {ing.quantity_on_hand} {ing.unit} on hand · {money(ing.last_purchase_cost)}/{ing.unit}
+                          {ing.quantity_on_hand.toFixed(1)} bag{ing.quantity_on_hand === 1 ? '' : 's'} on hand
+                          {ing.bag_unit_label ? ` (${ing.bag_unit_label})` : ''} · {money(ing.last_purchase_cost)}/bag
                         </p>
                       </div>
                       <div className="flex items-center gap-1.5">
@@ -440,6 +451,18 @@ export const StockMenuManager: React.FC = () => {
             <Plus className="w-3 h-3" /> Add Dish
           </button>
         </div>
+
+        {incompleteDishNames.size > 0 && (
+          <div className="flex items-start gap-2 bg-red-500/5 border border-red-500/20 rounded-xl p-2.5">
+            <AlertTriangle className="w-3.5 h-3.5 text-red-400 mt-0.5 shrink-0" />
+            <p className="text-[10px] font-mono text-red-300">
+              {incompleteDishNames.size} dish{incompleteDishNames.size > 1 ? 'es have' : ' has'} an ingredient
+              with no servings-per-bag set — sales still go through, but stock won't deplete for that
+             ingredient until it's filled in below.
+            </p>
+          </div>
+        )}
+
 
         {(ingredients ?? []).length === 0 && (
           <p className="text-[10px] font-mono text-zinc-600">Add at least one ingredient before creating a dish.</p>
@@ -519,9 +542,13 @@ export const StockMenuManager: React.FC = () => {
                           >
                             <span>{ing?.name ?? 'Unknown ingredient'}</span>
                             <div className="flex items-center gap-2">
-                              <span>
-                                {line.quantity_per_plate} {ing?.unit}
+                              {line.servings_per_bag ? (
+                              <span>{line.servings_per_bag}/bag</span>
+                            ) : (
+                              <span className="text-red-400 flex items-center gap-1">
+                               <AlertTriangle className="w-2.5 h-2.5" /> not set
                               </span>
+                            )}
                               {dish.lines.length > 1 && (
                                 <button
                                   onClick={() => handleRemoveDishLine(dish.dish_name, line.ingredient_id, dish.lines.length)}
@@ -553,10 +580,10 @@ export const StockMenuManager: React.FC = () => {
                         </select>
                         <input
                           type="number"
-                          placeholder="Qty"
+                          placeholder="Servings/bag"
                           value={newLineQty}
                           onChange={(e) => setNewLineQty(e.target.value)}
-                          className="w-14 bg-zinc-950 border border-zinc-700 rounded-lg px-1.5 py-1.5 text-[10px] text-white font-mono focus:outline-none focus:border-orange-500"
+                          className="w-20 bg-zinc-950 border border-zinc-700 rounded-lg px-1.5 py-1.5 text-[10px] text-white font-mono focus:outline-none focus:border-orange-500"
                         />
                         <button
                           onClick={() => handleAddLineToDish(dish.dish_name, dish.selling_price)}
@@ -645,10 +672,11 @@ export const StockMenuManager: React.FC = () => {
                     <button
                       key={u}
                       onClick={() => setIngUnit(u)}
-                      className={`py-2 text-[10px] font-mono font-bold uppercase rounded-lg border transition ${ingUnit === u
-                        ? 'bg-orange-500 text-zinc-950 border-orange-400'
-                        : 'bg-zinc-800 text-zinc-400 border-zinc-700'
-                        }`}
+                      className={`py-2 text-[10px] font-mono font-bold uppercase rounded-lg border transition ${
+                        ingUnit === u
+                          ? 'bg-orange-500 text-zinc-950 border-orange-400'
+                          : 'bg-zinc-800 text-zinc-400 border-zinc-700'
+                      }`}
                     >
                       {u}
                     </button>
@@ -656,10 +684,23 @@ export const StockMenuManager: React.FC = () => {
                 </div>
               </div>
 
+              <div>
+                <label className="text-[10px] font-mono text-zinc-500 uppercase tracking-widest mb-1 block">
+                  What's a bag? (optional)
+                </label>
+                <input
+                  type="text"
+                  value={ingBagUnitLabel}
+                  onChange={(e) => setIngBagUnitLabel(e.target.value)}
+                  placeholder="e.g. 2kg packet, 1 chicken, 1 gorogoro bucket"
+                  className="w-full bg-zinc-950 border border-zinc-700 rounded-xl px-3 py-2.5 text-xs text-white font-mono focus:outline-none focus:border-orange-500"
+                />
+              </div>
+
               <div className="grid grid-cols-2 gap-2">
                 <div>
                   <label className="text-[10px] font-mono text-zinc-500 uppercase tracking-widest mb-1 block">
-                    Starting Qty
+                    Starting Bags
                   </label>
                   <input
                     type="number"
@@ -672,7 +713,7 @@ export const StockMenuManager: React.FC = () => {
                 </div>
                 <div>
                   <label className="text-[10px] font-mono text-zinc-500 uppercase tracking-widest mb-1 block">
-                    Cost / Unit (KES)
+                    Cost / Bag (KES)
                   </label>
                   <input
                     type="number"
@@ -687,14 +728,14 @@ export const StockMenuManager: React.FC = () => {
 
               <div>
                 <label className="text-[10px] font-mono text-zinc-500 uppercase tracking-widest mb-1 block">
-                  Low Stock Threshold
+                  Low Stock Threshold (bags)
                 </label>
                 <input
                   type="number"
                   inputMode="decimal"
                   value={ingThreshold}
                   onChange={(e) => setIngThreshold(e.target.value)}
-                  placeholder="e.g. 5"
+                  placeholder="e.g. 2"
                   className="w-full bg-zinc-950 border border-zinc-700 rounded-xl px-3 py-2.5 text-xs text-white font-mono focus:outline-none focus:border-orange-500"
                 />
               </div>
@@ -737,13 +778,14 @@ export const StockMenuManager: React.FC = () => {
             </div>
 
             <p className="text-[10px] font-mono text-zinc-500">
-              Currently {restockTarget.quantity_on_hand} {restockTarget.unit} on hand
+              Currently {restockTarget.quantity_on_hand.toFixed(1)} bag{restockTarget.quantity_on_hand === 1 ? '' : 's'} on hand
+              {restockTarget.bag_unit_label ? ` (${restockTarget.bag_unit_label})` : ''}
             </p>
 
             <div className="grid grid-cols-2 gap-2">
               <div>
                 <label className="text-[10px] font-mono text-zinc-500 uppercase tracking-widest mb-1 block">
-                  Add Quantity
+                  Add Bags
                 </label>
                 <input
                   type="number"
@@ -757,7 +799,7 @@ export const StockMenuManager: React.FC = () => {
               </div>
               <div>
                 <label className="text-[10px] font-mono text-zinc-500 uppercase tracking-widest mb-1 block">
-                  New Cost / Unit
+                  New Cost / Bag
                 </label>
                 <input
                   type="number"
@@ -828,8 +870,12 @@ export const StockMenuManager: React.FC = () => {
 
               <div>
                 <label className="text-[10px] font-mono text-zinc-500 uppercase tracking-widest mb-1 block">
-                  Recipe (Ingredients per Plate)
+                  Recipe (1 bag makes ___ plates)
                 </label>
+                <p className="text-[9px] font-mono text-zinc-600 mb-2">
+                  Leave the number blank if you don't know the yield yet — the dish can still be
+                  created and sold, that ingredient just won't deduct stock until it's filled in.
+                </p>
                 <div className="space-y-2">
                   {dishLines.map((line, idx) => (
                     <div key={idx} className="flex items-center gap-1.5">
@@ -847,10 +893,10 @@ export const StockMenuManager: React.FC = () => {
                       </select>
                       <input
                         type="number"
-                        placeholder="Qty"
-                        value={line.quantity_per_plate}
-                        onChange={(e) => updateDishLine(idx, 'quantity_per_plate', e.target.value)}
-                        className="w-16 bg-zinc-950 border border-zinc-700 rounded-lg px-2 py-2 text-[11px] text-white font-mono focus:outline-none focus:border-orange-500"
+                        placeholder="Servings/bag"
+                        value={line.servings_per_bag}
+                        onChange={(e) => updateDishLine(idx, 'servings_per_bag', e.target.value)}
+                        className="w-24 bg-zinc-950 border border-zinc-700 rounded-lg px-2 py-2 text-[11px] text-white font-mono focus:outline-none focus:border-orange-500"
                       />
                       {dishLines.length > 1 && (
                         <button
@@ -864,7 +910,7 @@ export const StockMenuManager: React.FC = () => {
                   ))}
                 </div>
                 <button
-                  onClick={() => setDishLines((prev) => [...prev, { ingredient_id: '', quantity_per_plate: '' }])}
+                  onClick={() => setDishLines((prev) => [...prev, { ingredient_id: '', servings_per_bag: '' }])}
                   className="mt-2 text-[10px] font-mono text-zinc-500 hover:text-orange-400 flex items-center gap-1"
                 >
                   <Plus className="w-3 h-3" /> Add ingredient line

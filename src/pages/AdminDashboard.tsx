@@ -7,6 +7,7 @@ import { useActiveBranchId } from '../context/BranchScopeContext';
 import { StockMenuManager } from './StockMenuManager';
 import { FixedAssetsManager } from './FixedAssetsManager';
 import { SalesTargetManager } from '../components/SalesTargetManager';
+import { SuppliesManager } from '../components/SuppliesManager';
 import { Pagination } from '../components/Pagination';
 import { usePagination } from '../components/usePagination';
 import { SearchInput } from '../components/SearchInput';
@@ -29,12 +30,12 @@ import {
   Pencil,
   LayoutGrid,
   Boxes,
+  ShoppingBasket
 } from 'lucide-react';
 
 const money = (n: number) => `KES ${n.toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
-const isToday = (iso: string) => new Date(iso).toDateString() === new Date().toDateString();
 
-type AdminTab = 'overview' | 'stock' | 'assets' | 'staff' | 'money';
+type AdminTab = 'overview' | 'stock' | 'assets' | 'supplies' | 'staff' | 'money';
 
 export const AdminDashboard: React.FC = () => {
   const { currentUser } = useAuth();
@@ -74,6 +75,25 @@ export const AdminDashboard: React.FC = () => {
     [allLedgers, myBranchId]
   );
 
+  // ---------------------------------------------------------------------
+  // Supplies ("untrackable" consumables) — restock-cadence tracking.
+  // Declared here (ahead of `sales` below) since the Expenses calculation
+  // in `sales` needs branchSupplies to already exist.
+  // ---------------------------------------------------------------------
+  const allSupplies = useLiveQuery(() => db.supplies.toArray(), []) ?? [];
+  const branchSupplies = useMemo(
+    () => allSupplies.filter((s) => s.branch_id === myBranchId),
+    [allSupplies, myBranchId]
+  );
+  const overdueSuppliesCount = useMemo(() => {
+    const todayMs = Date.now();
+    return branchSupplies.filter((s) => {
+      if (!s.last_restocked_at) return true; // never restocked counts as overdue
+      const daysSince = Math.floor((todayMs - new Date(s.last_restocked_at).getTime()) / 86400000);
+      return daysSince > s.restock_interval_days;
+    }).length;
+  }, [branchSupplies]);
+
   const staffMap = new Map((staff ?? []).map((s) => [s.user_id, s]));
 
   const [activeTab, setActiveTab] = useState<AdminTab>('overview');
@@ -81,21 +101,45 @@ export const AdminDashboard: React.FC = () => {
   // ---------------------------------------------------------------------
   // Sales overview — today's paid orders, items sold, payment split, risk
   // ---------------------------------------------------------------------
+  // ---------------------------------------------------------------------
+  // Sales overview — revenue/orders/expenses/profit for a selectable
+  // window. Rolling windows (last 24h / 7d / 30d) rather than calendar
+  // week/month — avoids "it's only Tuesday" half-empty-week confusion.
+  //
+  // Expenses here = payroll deductions actually applied in the window +
+  // supplies restocked in the window. Deliberately NOT included yet:
+  // ingredient cost-of-goods-sold (waiting on the bag/servings-per-bag
+  // data to be costed) and fixed-asset purchases (one-off capex — shown
+  // separately so a furniture buy doesn't make a day's profit look bad).
+  // Once ingredient COGS is available this slots into the same `expenses`
+  // total without changing the shape of this calculation.
+  // ---------------------------------------------------------------------
+  const [salesPeriod, setSalesPeriod] = useState<'today' | 'week' | 'month'>('today');
+
+  const periodStartMs = useMemo(() => {
+    const now = Date.now();
+    if (salesPeriod === 'today') return new Date().setHours(0, 0, 0, 0);
+    if (salesPeriod === 'week') return now - 6 * 86400000; // last 7 days, rolling
+    return now - 29 * 86400000; // last 30 days, rolling
+  }, [salesPeriod]);
+
   const sales = useMemo(() => {
     const all = orders ?? [];
-    const paidToday = all.filter((o) => o.payment_status === 'paid' && isToday(o.timestamp));
+    const paidInPeriod = all.filter(
+      (o) => o.payment_status === 'paid' && new Date(o.timestamp).getTime() >= periodStartMs
+    );
 
-    const revenue = paidToday.reduce((sum, o) => sum + o.total_amount, 0);
-    const orderCount = paidToday.length;
+    const revenue = paidInPeriod.reduce((sum, o) => sum + o.total_amount, 0);
+    const orderCount = paidInPeriod.length;
     const avgTicket = orderCount > 0 ? revenue / orderCount : 0;
 
     const paymentSplit: Record<string, number> = { cash: 0, mpesa: 0, credit: 0 };
-    paidToday.forEach((o) => {
+    paidInPeriod.forEach((o) => {
       if (o.payment_method) paymentSplit[o.payment_method] = (paymentSplit[o.payment_method] ?? 0) + o.total_amount;
     });
 
     const itemMap = new Map<string, { quantity: number; revenue: number }>();
-    paidToday.forEach((o) => {
+    paidInPeriod.forEach((o) => {
       o.items.forEach((it) => {
         const entry = itemMap.get(it.dish_name) ?? { quantity: 0, revenue: 0 };
         entry.quantity += it.quantity;
@@ -107,6 +151,8 @@ export const AdminDashboard: React.FC = () => {
       .map(([dish_name, v]) => ({ dish_name, ...v }))
       .sort((a, b) => b.quantity - a.quantity);
 
+    // Open balances are always "right now," not scoped to the sales window —
+    // an unpaid tab from last week is still an unpaid tab today.
     const unsettled = all.filter((o) => o.payment_status === 'active');
     const unsettledValue = unsettled.reduce((sum, o) => sum + o.total_amount, 0);
     const credit = all.filter((o) => o.payment_status === 'credit');
@@ -114,8 +160,36 @@ export const AdminDashboard: React.FC = () => {
     const loss = all.filter((o) => o.payment_status === 'unpaid_loss');
     const lossValue = loss.reduce((sum, o) => sum + o.total_amount, 0);
 
-    return { revenue, orderCount, avgTicket, paymentSplit, itemsSold, unsettledValue, unsettledCount: unsettled.length, creditValue, lossValue };
-  }, [orders]);
+    // Expenses within the same window.
+    const deductedInPeriod = (ledgers ?? []).filter(
+      (l) => l.payroll_deduction_status === 'deducted' && new Date(l.date).getTime() >= periodStartMs
+    );
+    const payrollExpense = deductedInPeriod.reduce((sum, l) => sum + l.shortage_amount + l.spoilage_cost, 0);
+
+    const suppliesInPeriod = branchSupplies.filter(
+      (s) => s.last_restocked_at && new Date(s.last_restocked_at).getTime() >= periodStartMs
+    );
+    const suppliesExpense = suppliesInPeriod.reduce((sum, s) => sum + (s.last_restock_cost ?? 0), 0);
+
+    const expenses = payrollExpense + suppliesExpense;
+    const profit = revenue - expenses;
+
+    return {
+      revenue,
+      orderCount,
+      avgTicket,
+      paymentSplit,
+      itemsSold,
+      unsettledValue,
+      unsettledCount: unsettled.length,
+      creditValue,
+      lossValue,
+      payrollExpense,
+      suppliesExpense,
+      expenses,
+      profit,
+    };
+  }, [orders, ledgers, branchSupplies, periodStartMs]);
 
   const [itemsSearch, setItemsSearch] = useState('');
   const searchedItemsSold = useMemo(() => {
@@ -431,6 +505,7 @@ export const AdminDashboard: React.FC = () => {
     { id: 'overview', label: 'Overview', icon: LayoutGrid },
     { id: 'stock', label: 'Stock', icon: Package, badge: stock.lowStock.length },
     { id: 'assets', label: 'Assets', icon: Boxes },
+    { id: 'supplies', label: 'Supplies', icon: ShoppingBasket, badge: overdueSuppliesCount },
     { id: 'staff', label: 'Staff', icon: Users },
     { id: 'money', label: 'Money', icon: Wallet, badge: creditOrders.length },
   ];
@@ -461,12 +536,28 @@ export const AdminDashboard: React.FC = () => {
       {activeTab === 'overview' && (
         <div className="space-y-5">
           <div className="relative bg-[#0f1117] border border-zinc-800/80 rounded-2xl p-4 shadow-xl space-y-4">
-          <SalesTargetManager branchId={myBranchId} />
-            <div className="flex items-center gap-2 border-b border-zinc-800/80 pb-2">
-              <TrendingUp className="w-4 h-4 text-orange-400" />
-              <span className="font-mono text-xs font-bold text-zinc-300 uppercase tracking-wider">
-                Today's Sales
-              </span>
+            <div className="flex items-center justify-between border-b border-zinc-800/80 pb-2">
+              <div className="flex items-center gap-2">
+                <TrendingUp className="w-4 h-4 text-orange-400" />
+                <span className="font-mono text-xs font-bold text-zinc-300 uppercase tracking-wider">
+                  Sales
+                </span>
+              </div>
+              <div className="flex bg-zinc-900 p-0.5 rounded-lg border border-zinc-800">
+                {(['today', 'week', 'month'] as const).map((p) => (
+                  <button
+                    key={p}
+                    onClick={() => setSalesPeriod(p)}
+                    className={`px-2 py-1 rounded-md font-mono text-[9px] font-bold uppercase tracking-wider transition ${
+                      salesPeriod === p
+                        ? 'bg-orange-500 text-zinc-950'
+                        : 'text-zinc-500 hover:text-white'
+                    }`}
+                  >
+                    {p === 'today' ? 'Today' : p === 'week' ? '7d' : '30d'}
+                  </button>
+                ))}
+              </div>
             </div>
 
             <div className="grid grid-cols-3 gap-2">
@@ -484,6 +575,31 @@ export const AdminDashboard: React.FC = () => {
               </div>
             </div>
 
+            <div className="grid grid-cols-2 gap-2">
+              <div className="bg-zinc-900/60 border border-red-500/20 rounded-xl p-2.5 text-center">
+                <p className="text-[9px] font-mono text-zinc-500 uppercase tracking-widest mb-1">Expenses</p>
+                <p className="text-red-400 font-mono font-bold text-sm">{money(sales.expenses)}</p>
+              </div>
+              <div
+                className={`bg-zinc-900/60 border rounded-xl p-2.5 text-center ${
+                  sales.profit >= 0 ? 'border-emerald-500/20' : 'border-red-500/20'
+                }`}
+              >
+                <p className="text-[9px] font-mono text-zinc-500 uppercase tracking-widest mb-1">Profit</p>
+                <p
+                  className={`font-mono font-bold text-sm ${
+                    sales.profit >= 0 ? 'text-emerald-400' : 'text-red-400'
+                  }`}
+                >
+                  {money(sales.profit)}
+                </p>
+              </div>
+            </div>
+            <p className="text-[9px] font-mono text-zinc-600 -mt-2">
+              Expenses: {money(sales.payrollExpense)} payroll deductions + {money(sales.suppliesExpense)} supplies restocked.
+              Ingredient cost isn't counted yet — pending the bag/servings setup.
+            </p>
+
             <div className="flex gap-2">
               <div className="flex-1 bg-zinc-900/40 border border-zinc-800/60 rounded-lg p-2 text-center">
                 <p className="text-[9px] font-mono text-zinc-500 uppercase">Cash</p>
@@ -497,60 +613,6 @@ export const AdminDashboard: React.FC = () => {
                 <p className="text-[9px] font-mono text-zinc-500 uppercase">Credit</p>
                 <p className="text-xs font-mono font-bold text-zinc-200">{money(sales.paymentSplit.credit)}</p>
               </div>
-            </div>
-
-            {(sales.unsettledCount > 0 || sales.creditValue > 0 || sales.lossValue > 0) && (
-              <div className="flex items-start gap-2 bg-red-500/5 border border-red-500/20 rounded-xl p-2.5">
-                <ShieldAlert className="w-3.5 h-3.5 text-red-400 mt-0.5 shrink-0" />
-                <div className="text-[10px] font-mono text-red-300 space-y-0.5">
-                  {sales.unsettledCount > 0 && (
-                    <p>{sales.unsettledCount} unsettled bill{sales.unsettledCount > 1 ? 's' : ''} — {money(sales.unsettledValue)} not yet collected</p>
-                  )}
-                  {sales.creditValue > 0 && <p>{money(sales.creditValue)} outstanding on credit</p>}
-                  {sales.lossValue > 0 && <p>{money(sales.lossValue)} written off as unpaid loss</p>}
-                </div>
-              </div>
-            )}
-
-            <div>
-              <div className="flex items-center gap-1.5 mb-2">
-                <Receipt className="w-3.5 h-3.5 text-zinc-500" />
-                <span className="text-[10px] font-mono text-zinc-500 uppercase tracking-widest">Items Sold Today</span>
-              </div>
-              {sales.itemsSold.length === 0 ? (
-                <p className="text-zinc-600 text-[11px] font-mono text-center py-4">No sales settled yet today</p>
-              ) : (
-                <div>
-                  <SearchInput
-                    value={itemsSearch}
-                    onChange={(v) => { setItemsSearch(v); setItemsPage(1); }}
-                    placeholder="Search items sold..."
-                  />
-                  {searchedItemsSold.length === 0 ? (
-                    <p className="text-zinc-600 text-[11px] font-mono text-center py-4">No items match your search</p>
-                  ) : (
-                    <>
-                      <div className="space-y-1.5 mt-2">
-                        {pagedItemsSold.map((it) => (
-                          <div
-                            key={it.dish_name}
-                            className="flex items-center justify-between bg-zinc-900/40 px-2.5 py-1.5 rounded-lg border border-zinc-800/60"
-                          >
-                            <span className="text-xs text-zinc-200 truncate">{it.dish_name}</span>
-                            <div className="flex items-center gap-2 shrink-0">
-                              <span className="text-[10px] font-mono text-orange-400 bg-orange-500/10 border border-orange-500/20 px-1.5 py-0.5 rounded">
-                                x{it.quantity}
-                              </span>
-                              <span className="text-[10px] font-mono text-zinc-500 w-14 text-right">{money(it.revenue)}</span>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                      <Pagination page={itemsPage} totalPages={itemsTotalPages} onPageChange={setItemsPage} />
-                    </>
-                  )}
-                </div>
-              )}
             </div>
           </div>
 
@@ -585,7 +647,7 @@ export const AdminDashboard: React.FC = () => {
       {activeTab === 'stock' && <StockMenuManager />}
 
       {/* ===================== ASSETS TAB ===================== */}
-      {activeTab === 'assets' && <FixedAssetsManager />}
+      {activeTab === 'supplies' && <SuppliesManager branchId={myBranchId} />}
 
       {/* ===================== STAFF TAB ===================== */}
       {activeTab === 'staff' && (

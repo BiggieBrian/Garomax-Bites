@@ -20,14 +20,22 @@ export interface User {
 }
 
 // Shared identity — same ingredient exists once no matter how many branches stock it.
+// Stock is now tracked in "bags" (a restock unit the admin defines in plain
+// language) rather than raw weight — `unit` stays as a fallback label for
+// ingredients that haven't been given a bag definition yet.
 export interface Ingredient {
   ingredient_id: string;
   name: string;
   unit: 'g' | 'kg' | 'ml' | 'l' | 'pcs';
+  bag_unit_label?: string; // what one bag actually is, e.g. "2kg packet", "1 chicken", "1 gorogoro bucket"
   synced?: boolean;
 }
 
-// Per-branch stock level for a shared ingredient.
+// Per-branch stock level for a shared ingredient. `quantity_on_hand` is now a
+// bag count (can be fractional, e.g. 2.4 bags left) rather than a raw
+// weight, and `last_purchase_cost` is the cost of one whole bag — updated at
+// each restock rather than fixed once, since bag price/size can vary
+// (see Potatoes: "1 gunia, var dep on size").
 export interface IngredientStock {
   branch_id: string;
   ingredient_id: string;
@@ -38,11 +46,15 @@ export interface IngredientStock {
 }
 
 // Menu is shared across branches — unchanged from the single-branch schema.
+// `servings_per_bag` replaces the old exact-weight `quantity_per_plate`:
+// "one bag of this ingredient makes N plates of this dish." Optional/blank
+// while the real yield numbers are still being collected — see the
+// skip-and-flag handling in KitchenDisplay.tsx and StockMenuManager.tsx.
 export interface RecipeItem {
   dish_name: string;
   selling_price: number;
   ingredient_id: string;
-  quantity_per_plate: number;
+  servings_per_bag?: number;
   synced?: boolean;
 }
 
@@ -113,6 +125,22 @@ export interface StaffLedger {
   spoilage_cost: number;
   reason: string;
   payroll_deduction_status: 'pending' | 'deducted' | 'waived';
+  synced?: boolean;
+}
+
+// "Untrackable" consumables — oil, onions, tomatoes, gas, water — that don't
+// map to a dish in exact portions. Tracked by restock cadence instead of
+// stock count: admin taps "Mark Restocked" when they buy more, the app just
+// watches the calendar against the expected interval.
+export interface Supply {
+  supply_id: string;
+  branch_id: string;
+  name: string;
+  unit_label: string; // free text, e.g. "5L jerrican", "13kg cylinder"
+  restock_interval_days: number;
+  last_restocked_at?: string; // ISO date of the most recent restock
+  last_restock_cost?: number; // what that restock cost — feeds Expenses
+  notes?: string;
   synced?: boolean;
 }
 
