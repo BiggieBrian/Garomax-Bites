@@ -33,7 +33,6 @@ import {
 } from 'lucide-react';
 
 const money = (n: number) => `KES ${n.toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
-const UNITS: Ingredient['unit'][] = ['g', 'kg', 'ml', 'l', 'pcs'];
 
 export const StockMenuManager: React.FC = () => {
   const myBranchId = useActiveBranchId();
@@ -95,7 +94,6 @@ export const StockMenuManager: React.FC = () => {
   // -------------------------------------------------------------------
   const [showIngredientForm, setShowIngredientForm] = useState(false);
   const [ingName, setIngName] = useState('');
-  const [ingUnit, setIngUnit] = useState<Ingredient['unit']>('kg');
   const [ingBagUnitLabel, setIngBagUnitLabel] = useState('');
   const [ingQty, setIngQty] = useState('');
   const [ingCost, setIngCost] = useState('');
@@ -104,7 +102,6 @@ export const StockMenuManager: React.FC = () => {
 
   const resetIngredientForm = () => {
     setIngName('');
-    setIngUnit('kg');
     setIngBagUnitLabel('');
     setIngQty('');
     setIngCost('');
@@ -126,7 +123,10 @@ export const StockMenuManager: React.FC = () => {
     await db.ingredients.add({
       ingredient_id,
       name: ingName.trim(),
-      unit: ingUnit,
+      // Everything in this app (stock, restocking, recipes) is tracked in
+      // "bags" (see bag_unit_label) rather than raw weight/volume, so the
+      // underlying unit is no longer surfaced to the user — just defaulted.
+      unit: 'pcs',
       bag_unit_label: ingBagUnitLabel.trim() || undefined,
       synced: false,
     });
@@ -667,25 +667,6 @@ export const StockMenuManager: React.FC = () => {
                   placeholder="e.g. Tomatoes"
                   className="w-full bg-zinc-950 border border-zinc-700 rounded-xl px-3 py-2.5 text-xs text-white font-mono focus:outline-none focus:border-orange-500"
                 />
-              </div>
-
-              <div>
-                <label className="text-[10px] font-mono text-zinc-500 uppercase tracking-widest mb-1 block">Unit</label>
-                <div className="grid grid-cols-5 gap-1.5">
-                  {UNITS.map((u) => (
-                    <button
-                      key={u}
-                      onClick={() => setIngUnit(u)}
-                      className={`py-2 text-[10px] font-mono font-bold uppercase rounded-lg border transition ${
-                        ingUnit === u
-                          ? 'bg-orange-500 text-zinc-950 border-orange-400'
-                          : 'bg-zinc-800 text-zinc-400 border-zinc-700'
-                      }`}
-                    >
-                      {u}
-                    </button>
-                  ))}
-                </div>
               </div>
 
               <div>
