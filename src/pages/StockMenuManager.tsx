@@ -107,6 +107,7 @@ export const StockMenuManager: React.FC = () => {
   const incompleteDishNames = useMemo(() => {
     const names = new Set<string>();
     (recipes ?? []).forEach((r) => {
+      if (r.ingredient_id === UNTRACKED_INGREDIENT_ID) return;
       if (!r.servings_per_bag || r.servings_per_bag <= 0) names.add(r.dish_name);
     });
     return names;
@@ -578,16 +579,15 @@ export const StockMenuManager: React.FC = () => {
           </button>
         </div>
 
-        {/* {incompleteDishNames.size > 0 && (
+        {incompleteDishNames.size > 0 && (
           <div className="flex items-start gap-2 bg-red-500/5 border border-red-500/20 rounded-xl p-2.5">
             <AlertTriangle className="w-3.5 h-3.5 text-red-400 mt-0.5 shrink-0" />
             <p className="text-[10px] font-mono text-red-300">
               {incompleteDishNames.size} dish{incompleteDishNames.size > 1 ? 'es have' : ' has'} an ingredient
-              with no servings-per-bag set — sales still go through, but stock won't deplete for that
-             ingredient until it's filled in below.
+              with no portioning set.
             </p>
           </div>
-        )} */}
+        )}
 
 
         {(ingredients ?? []).length === 0 && (
