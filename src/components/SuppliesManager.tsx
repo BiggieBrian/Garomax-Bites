@@ -70,22 +70,31 @@ export const SuppliesManager: React.FC<{ branchId: string | null }> = ({ branchI
   // -------------------------------------------------------------------
   const [restockingId, setRestockingId] = useState<string | null>(null);
   const [restockCost, setRestockCost] = useState('');
+  const [restockQuantity, setRestockQuantity] = useState('');
+  const [restockInterval, setRestockInterval] = useState('');
 
   const openRestock = (s: Supply) => {
     setRestockingId(s.supply_id);
     setRestockCost(s.last_restock_cost ? String(s.last_restock_cost) : '');
+    setRestockQuantity(s.last_restock_quantity ?? '');
+    setRestockInterval(String(s.restock_interval_days));
   };
 
   const confirmRestock = async (s: Supply) => {
     const cost = restockCost.trim() ? parseFloat(restockCost) : undefined;
+    const interval = parseInt(restockInterval, 10);
     await db.supplies.update(s.supply_id, {
       last_restocked_at: todayIso(),
       last_restock_cost: cost !== undefined && !isNaN(cost) ? cost : s.last_restock_cost,
+      last_restock_quantity: restockQuantity.trim() || undefined,
+      restock_interval_days: interval && interval > 0 ? interval : s.restock_interval_days,
       synced: false,
     });
     requestSync();
     setRestockingId(null);
     setRestockCost('');
+    setRestockQuantity('');
+    setRestockInterval('');
   };
 
   // -------------------------------------------------------------------
@@ -204,6 +213,13 @@ export const SuppliesManager: React.FC<{ branchId: string | null }> = ({ branchI
                     Mark <span className="font-semibold text-white">{s.name}</span> restocked today?
                   </p>
                   <input
+                    type="text"
+                    value={restockQuantity}
+                    onChange={(e) => setRestockQuantity(e.target.value)}
+                    placeholder={`How much this time? (e.g. 10kg) — optional`}
+                    className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-sm text-zinc-100 placeholder:text-zinc-600 focus:outline-none focus:border-orange-500/50"
+                  />
+                  <input
                     type="number"
                     inputMode="decimal"
                     value={restockCost}
@@ -211,6 +227,18 @@ export const SuppliesManager: React.FC<{ branchId: string | null }> = ({ branchI
                     placeholder="Cost this restock (KES) — optional"
                     className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-sm text-zinc-100 placeholder:text-zinc-600 focus:outline-none focus:border-orange-500/50"
                   />
+                  <div>
+                    <label className="text-[9px] font-mono text-zinc-500 uppercase tracking-widest mb-1 block">
+                      Next restock in (days) — adjust if this buy will last a different amount of time
+                    </label>
+                    <input
+                      type="number"
+                      inputMode="numeric"
+                      value={restockInterval}
+                      onChange={(e) => setRestockInterval(e.target.value)}
+                      className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-sm text-zinc-100 focus:outline-none focus:border-orange-500/50"
+                    />
+                  </div>
                   <div className="flex gap-2">
                     <button
                       onClick={() => confirmRestock(s)}
@@ -258,11 +286,13 @@ export const SuppliesManager: React.FC<{ branchId: string | null }> = ({ branchI
                     ) : isOverdue ? (
                       <p className="text-[10px] font-mono text-red-400 flex items-center gap-1 mt-1">
                         <AlertTriangle className="w-3 h-3" /> Overdue by {overdueBy}d
+                        {s.last_restock_quantity ? ` · bought ${s.last_restock_quantity}` : ''}
                         {s.last_restock_cost ? ` · last cost ${money(s.last_restock_cost)}` : ''}
                       </p>
                     ) : (
                       <p className="text-[10px] font-mono text-zinc-500 mt-1">
                         Last restocked {daysSince(s.last_restocked_at!)}d ago
+                        {s.last_restock_quantity ? ` · bought ${s.last_restock_quantity}` : ''}
                         {s.last_restock_cost ? ` · ${money(s.last_restock_cost)}` : ''}
                       </p>
                     )}

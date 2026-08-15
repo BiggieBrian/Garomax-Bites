@@ -149,6 +149,18 @@ export class KibandaDatabase extends Dexie {
     this.version(8).stores({
       supplies: 'supply_id, branch_id, synced',
     });
+
+    // v9: menu categorization (drinks / snacks / meals). `category` is
+    // required on RecipeItem going forward, so existing dishes are
+    // backfilled to 'meals' — the safest default since most pre-existing
+    // menus here are food, not drinks.
+    this.version(9).stores({
+      recipes: '[dish_name+ingredient_id], dish_name, ingredient_id, category',
+    }).upgrade(async (tx) => {
+      await tx.table('recipes').toCollection().modify((r) => {
+        if (!r.category) r.category = 'meals';
+      });
+    });
   }
 }
 

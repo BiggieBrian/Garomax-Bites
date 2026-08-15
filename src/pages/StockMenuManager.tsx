@@ -8,7 +8,7 @@ import {
   deleteRecipeDishRemote,
   deleteRecipeLineRemote,
 } from '../db/sync';
-import type { Ingredient, RecipeItem } from '../types';
+import type { Ingredient, RecipeItem, DishCategory } from '../types';
 
 // A branch's view of a shared ingredient: identity fields from `Ingredient`
 // joined with this branch's own quantity/cost/threshold from `IngredientStock`.
@@ -33,6 +33,8 @@ import {
 } from 'lucide-react';
 
 const money = (n: number) => `KES ${n.toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
+const CATEGORIES: DishCategory[] = ['meals', 'snacks', 'drinks'];
+const CATEGORY_LABELS: Record<DishCategory, string> = { meals: 'Meals', snacks: 'Snacks', drinks: 'Drinks' };
 
 export const StockMenuManager: React.FC = () => {
   const myBranchId = useActiveBranchId();
@@ -42,9 +44,11 @@ export const StockMenuManager: React.FC = () => {
   const recipes = useLiveQuery(() => db.recipes.toArray(), []);
 
   // Only ingredients this branch actually stocks — i.e. has a matching
-  // ingredientStock row for. (Sharing an existing ingredient definition
-  // into a second branch isn't wired up in this UI yet; each branch's
-  // "Add Ingredient" creates its own definition + stock row together.)
+  // ingredientStock row for. A branch can either define a brand-new
+  // ingredient ("Add Ingredient") or stock an ingredient another branch
+  // already defined ("Already Stocked Elsewhere" — see unstockedIngredients
+  // below), which just adds this branch's own stock row against the
+  // existing shared ingredient_id instead of creating a duplicate identity.
   const ingredients: StockedIngredient[] = useMemo(() => {
     const defMap = new Map((ingredientDefs ?? []).map((i) => [i.ingredient_id, i]));
     return (allIngredientStock ?? [])
@@ -64,12 +68,21 @@ export const StockMenuManager: React.FC = () => {
 
   const ingredientMap = new Map(ingredients.map((i) => [i.ingredient_id, i]));
 
+  // Ingredients another branch already defined/stocks, but this branch
+  // hasn't stocked yet — candidates for "Stock an existing ingredient"
+  // instead of creating a duplicate identity via "Add Ingredient".
+  const unstockedIngredients: Ingredient[] = useMemo(() => {
+    const stockedIds = new Set(ingredients.map((i) => i.ingredient_id));
+    return (ingredientDefs ?? []).filter((d) => !stockedIds.has(d.ingredient_id));
+  }, [ingredientDefs, ingredients]);
+
   const dishes = useMemo(() => {
-    const map = new Map<string, { dish_name: string; selling_price: number; lines: RecipeItem[] }>();
+    const map = new Map<string, { dish_name: string; selling_price: number; category: DishCategory; lines: RecipeItem[] }>();
     (recipes ?? []).forEach((r) => {
-      const entry = map.get(r.dish_name) ?? { dish_name: r.dish_name, selling_price: r.selling_price, lines: [] };
+      const entry = map.get(r.dish_name) ?? { dish_name: r.dish_name, selling_price: r.selling_price, category: r.category, lines: [] };
       entry.lines.push(r);
       entry.selling_price = r.selling_price;
+      entry.category = r.category;
       map.set(r.dish_name, entry);
     });
     return Array.from(map.values()).sort((a, b) => a.dish_name.localeCompare(b.dish_name));
@@ -93,16 +106,20 @@ export const StockMenuManager: React.FC = () => {
   // Add ingredient
   // -------------------------------------------------------------------
   const [showIngredientForm, setShowIngredientForm] = useState(false);
+  const [ingMode, setIngMode] = useState<'new' | 'existing'>('new');
   const [ingName, setIngName] = useState('');
   const [ingBagUnitLabel, setIngBagUnitLabel] = useState('');
+  const [existingIngredientId, setExistingIngredientId] = useState('');
   const [ingQty, setIngQty] = useState('');
   const [ingCost, setIngCost] = useState('');
   const [ingThreshold, setIngThreshold] = useState('');
   const [ingError, setIngError] = useState('');
 
   const resetIngredientForm = () => {
+    setIngMode('new');
     setIngName('');
     setIngBagUnitLabel('');
+    setExistingIngredientId('');
     setIngQty('');
     setIngCost('');
     setIngThreshold('');
@@ -112,13 +129,31 @@ export const StockMenuManager: React.FC = () => {
   const handleAddIngredient = async () => {
     setIngError('');
     if (!myBranchId) return setIngError('Your account has no branch assigned — contact the owner.');
-    if (!ingName.trim()) return setIngError('Enter an ingredient name.');
+
     const qty = parseFloat(ingQty);
     const cost = parseFloat(ingCost);
     const threshold = parseFloat(ingThreshold);
     if (isNaN(qty) || qty < 0) return setIngError('Enter a valid starting bag count.');
     if (isNaN(cost) || cost < 0) return setIngError('Enter a valid cost per bag.');
     if (isNaN(threshold) || threshold < 0) return setIngError('Enter a valid low-stock threshold (in bags).');
+
+    if (ingMode === 'existing') {
+      if (!existingIngredientId) return setIngError('Choose an ingredient to stock.');
+      await db.ingredientStock.add({
+        branch_id: myBranchId,
+        ingredient_id: existingIngredientId,
+        quantity_on_hand: qty,
+        last_purchase_cost: cost,
+        low_stock_threshold: threshold,
+        synced: false,
+      });
+      requestSync();
+      resetIngredientForm();
+      setShowIngredientForm(false);
+      return;
+    }
+
+    if (!ingName.trim()) return setIngError('Enter an ingredient name.');
     const ingredient_id = crypto.randomUUID();
     await db.ingredients.add({
       ingredient_id,
@@ -168,6 +203,45 @@ export const StockMenuManager: React.FC = () => {
   };
 
   // -------------------------------------------------------------------
+  // Edit ingredient (name / bag definition / low-stock threshold —
+  // quantity and cost are still handled by Restock, since those change on
+  // every purchase rather than being fixed config).
+  // -------------------------------------------------------------------
+  const [editingIngredient, setEditingIngredient] = useState<StockedIngredient | null>(null);
+  const [editIngName, setEditIngName] = useState('');
+  const [editIngBagUnitLabel, setEditIngBagUnitLabel] = useState('');
+  const [editIngThreshold, setEditIngThreshold] = useState('');
+  const [editIngError, setEditIngError] = useState('');
+
+  const openEditIngredient = (ing: StockedIngredient) => {
+    setEditingIngredient(ing);
+    setEditIngName(ing.name);
+    setEditIngBagUnitLabel(ing.bag_unit_label ?? '');
+    setEditIngThreshold(String(ing.low_stock_threshold));
+    setEditIngError('');
+  };
+
+  const handleSaveIngredientEdit = async () => {
+    if (!editingIngredient || !myBranchId) return;
+    setEditIngError('');
+    if (!editIngName.trim()) return setEditIngError('Enter an ingredient name.');
+    const threshold = parseFloat(editIngThreshold);
+    if (isNaN(threshold) || threshold < 0) return setEditIngError('Enter a valid low-stock threshold (in bags).');
+
+    await db.ingredients.update(editingIngredient.ingredient_id, {
+      name: editIngName.trim(),
+      bag_unit_label: editIngBagUnitLabel.trim() || undefined,
+      synced: false,
+    });
+    await db.ingredientStock.update([myBranchId, editingIngredient.ingredient_id], {
+      low_stock_threshold: threshold,
+      synced: false,
+    });
+    requestSync();
+    setEditingIngredient(null);
+  };
+
+  // -------------------------------------------------------------------
   // Delete ingredient
   // -------------------------------------------------------------------
   const [confirmDeleteIngredient, setConfirmDeleteIngredient] = useState<string | null>(null);
@@ -189,6 +263,7 @@ export const StockMenuManager: React.FC = () => {
   const [showDishForm, setShowDishForm] = useState(false);
   const [dishName, setDishName] = useState('');
   const [dishPrice, setDishPrice] = useState('');
+  const [dishCategory, setDishCategory] = useState<DishCategory>('meals');
   const [dishLines, setDishLines] = useState<{ ingredient_id: string; servings_per_bag: string }[]>([
     { ingredient_id: '', servings_per_bag: '' },
   ]);
@@ -197,6 +272,7 @@ export const StockMenuManager: React.FC = () => {
   const resetDishForm = () => {
     setDishName('');
     setDishPrice('');
+    setDishCategory('meals');
     setDishLines([{ ingredient_id: '', servings_per_bag: '' }]);
     setDishError('');
   };
@@ -230,6 +306,7 @@ export const StockMenuManager: React.FC = () => {
         selling_price: price,
         ingredient_id: l.ingredient_id,
         servings_per_bag: l.servings_per_bag.trim() ? parseFloat(l.servings_per_bag) : undefined,
+        category: dishCategory,
         synced: false,
       }))
     );
@@ -254,6 +331,11 @@ export const StockMenuManager: React.FC = () => {
     requestSync();
     setEditingPriceDish(null);
     setEditingPriceValue('');
+  };
+
+  const handleChangeCategory = async (dish_name: string, category: DishCategory) => {
+    await db.recipes.where('dish_name').equals(dish_name).modify({ category, synced: false });
+    requestSync();
   };
 
   // -------------------------------------------------------------------
@@ -292,7 +374,7 @@ export const StockMenuManager: React.FC = () => {
   const [newLineIngredient, setNewLineIngredient] = useState('');
   const [newLineQty, setNewLineQty] = useState('');
 
-  const handleAddLineToDish = async (dish_name: string, selling_price: number) => {
+  const handleAddLineToDish = async (dish_name: string, selling_price: number, category: DishCategory) => {
    if (!newLineIngredient) return;
     if (newLineQty.trim() && (isNaN(parseFloat(newLineQty)) || parseFloat(newLineQty) <= 0)) return;
     await db.recipes.put({
@@ -300,6 +382,7 @@ export const StockMenuManager: React.FC = () => {
       ingredient_id: newLineIngredient,
       selling_price,
       servings_per_bag: newLineQty.trim() ? parseFloat(newLineQty) : undefined,
+      category,
       synced: false,
     });
     requestSync();
@@ -323,10 +406,15 @@ export const StockMenuManager: React.FC = () => {
   } = usePagination(searchedIngredients, 5);
 
   const [dishSearch, setDishSearch] = useState('');
+  const [dishCategoryFilter, setDishCategoryFilter] = useState<DishCategory | 'all'>('all');
   const searchedDishes = useMemo(() => {
     const q = dishSearch.trim().toLowerCase();
-    return q ? dishes.filter((d) => d.dish_name.toLowerCase().includes(q)) : dishes;
-  }, [dishes, dishSearch]);
+    return dishes.filter(
+      (d) =>
+        (dishCategoryFilter === 'all' || d.category === dishCategoryFilter) &&
+        (!q || d.dish_name.toLowerCase().includes(q))
+    );
+  }, [dishes, dishSearch, dishCategoryFilter]);
 
   const {
     page: dishesPage,
@@ -388,6 +476,13 @@ export const StockMenuManager: React.FC = () => {
                       </div>
                       <div className="flex items-center gap-1.5">
                         {isLow && <AlertTriangle className="w-3.5 h-3.5 text-red-400" />}
+                        <button
+                          onClick={() => openEditIngredient(ing)}
+                          title="Edit"
+                          className="p-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-300"
+                        >
+                          <Pencil className="w-3.5 h-3.5" />
+                        </button>
                         <button
                           onClick={() => setRestockTarget(ing)}
                           title="Restock"
@@ -477,6 +572,21 @@ export const StockMenuManager: React.FC = () => {
             <p className="text-zinc-600 text-[11px] font-mono text-center py-6">No dishes yet</p>
           ) : (
             <>
+              <div className="flex gap-1.5">
+                {(['all', ...CATEGORIES] as const).map((c) => (
+                  <button
+                    key={c}
+                    onClick={() => { setDishCategoryFilter(c); setDishesPage(1); }}
+                    className={`flex-1 py-1.5 text-[10px] font-mono font-bold uppercase tracking-wider rounded-lg border transition ${
+                      dishCategoryFilter === c
+                        ? 'bg-orange-500 text-zinc-950 border-orange-400'
+                        : 'bg-zinc-900/60 text-zinc-500 border-zinc-800'
+                    }`}
+                  >
+                    {c === 'all' ? 'All' : CATEGORY_LABELS[c]}
+                  </button>
+                ))}
+              </div>
               <SearchInput
                 value={dishSearch}
                 onChange={(v) => { setDishSearch(v); setDishesPage(1); }}
@@ -496,7 +606,20 @@ export const StockMenuManager: React.FC = () => {
                 return (
                   <div key={dish.dish_name} className="bg-zinc-900/60 border border-zinc-800/60 rounded-xl p-3 space-y-2">
                     <div className="flex items-center justify-between">
-                      <span className="text-sm font-semibold text-white">{dish.dish_name}</span>
+                      <div>
+                        <span className="text-sm font-semibold text-white">{dish.dish_name}</span>
+                        <select
+                          value={dish.category}
+                          onChange={(e) => handleChangeCategory(dish.dish_name, e.target.value as DishCategory)}
+                          className="block mt-0.5 bg-transparent text-[9px] font-mono text-zinc-500 uppercase tracking-widest focus:outline-none focus:text-orange-400"
+                        >
+                          {CATEGORIES.map((c) => (
+                            <option key={c} value={c} className="bg-zinc-900 text-zinc-300">
+                              {CATEGORY_LABELS[c]}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
                       <div className="flex items-center gap-1.5">
                         {isEditingPrice ? (
                           <>
@@ -590,7 +713,7 @@ export const StockMenuManager: React.FC = () => {
                           className="w-20 bg-zinc-950 border border-zinc-700 rounded-lg px-1.5 py-1.5 text-[10px] text-white font-mono focus:outline-none focus:border-orange-500"
                         />
                         <button
-                          onClick={() => handleAddLineToDish(dish.dish_name, dish.selling_price)}
+                          onClick={() => handleAddLineToDish(dish.dish_name, dish.selling_price, dish.category)}
                           className="p-1.5 rounded-lg bg-orange-500 text-zinc-950"
                         >
                           <Check className="w-3.5 h-3.5" />
@@ -657,30 +780,80 @@ export const StockMenuManager: React.FC = () => {
               </button>
             </div>
 
-            <div className="space-y-3">
-              <div>
-                <label className="text-[10px] font-mono text-zinc-500 uppercase tracking-widest mb-1 block">Name</label>
-                <input
-                  type="text"
-                  value={ingName}
-                  onChange={(e) => setIngName(e.target.value)}
-                  placeholder="e.g. Tomatoes"
-                  className="w-full bg-zinc-950 border border-zinc-700 rounded-xl px-3 py-2.5 text-xs text-white font-mono focus:outline-none focus:border-orange-500"
-                />
+            {unstockedIngredients.length > 0 && (
+              <div className="grid grid-cols-2 gap-1.5">
+                <button
+                  onClick={() => setIngMode('new')}
+                  className={`py-2 text-[10px] font-mono font-bold uppercase rounded-lg border transition ${
+                    ingMode === 'new'
+                      ? 'bg-orange-500 text-zinc-950 border-orange-400'
+                      : 'bg-zinc-800 text-zinc-400 border-zinc-700'
+                  }`}
+                >
+                  New Ingredient
+                </button>
+                <button
+                  onClick={() => setIngMode('existing')}
+                  className={`py-2 text-[10px] font-mono font-bold uppercase rounded-lg border transition ${
+                    ingMode === 'existing'
+                      ? 'bg-orange-500 text-zinc-950 border-orange-400'
+                      : 'bg-zinc-800 text-zinc-400 border-zinc-700'
+                  }`}
+                >
+                  Already Stocked Elsewhere
+                </button>
               </div>
+            )}
 
-              <div>
-                <label className="text-[10px] font-mono text-zinc-500 uppercase tracking-widest mb-1 block">
-                  What's a bag? (optional)
-                </label>
-                <input
-                  type="text"
-                  value={ingBagUnitLabel}
-                  onChange={(e) => setIngBagUnitLabel(e.target.value)}
-                  placeholder="e.g. 2kg packet, 1 chicken, 1 gorogoro bucket"
-                  className="w-full bg-zinc-950 border border-zinc-700 rounded-xl px-3 py-2.5 text-xs text-white font-mono focus:outline-none focus:border-orange-500"
-                />
-              </div>
+            <div className="space-y-3">
+              {ingMode === 'existing' ? (
+                <div>
+                  <label className="text-[10px] font-mono text-zinc-500 uppercase tracking-widest mb-1 block">
+                    Ingredient
+                  </label>
+                  <select
+                    value={existingIngredientId}
+                    onChange={(e) => setExistingIngredientId(e.target.value)}
+                    className="w-full bg-zinc-950 border border-zinc-700 rounded-xl px-3 py-2.5 text-xs text-white font-mono focus:outline-none focus:border-orange-500"
+                  >
+                    <option value="">Choose ingredient...</option>
+                    {unstockedIngredients.map((i) => (
+                      <option key={i.ingredient_id} value={i.ingredient_id}>
+                        {i.name}{i.bag_unit_label ? ` (${i.bag_unit_label})` : ''}
+                      </option>
+                    ))}
+                  </select>
+                  <p className="text-[9px] font-mono text-zinc-600 mt-1">
+                    Already defined at another branch — this just sets your branch's own stock levels for it.
+                  </p>
+                </div>
+              ) : (
+                <>
+                  <div>
+                    <label className="text-[10px] font-mono text-zinc-500 uppercase tracking-widest mb-1 block">Name</label>
+                    <input
+                      type="text"
+                      value={ingName}
+                      onChange={(e) => setIngName(e.target.value)}
+                      placeholder="e.g. Tomatoes"
+                      className="w-full bg-zinc-950 border border-zinc-700 rounded-xl px-3 py-2.5 text-xs text-white font-mono focus:outline-none focus:border-orange-500"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="text-[10px] font-mono text-zinc-500 uppercase tracking-widest mb-1 block">
+                      What's a bag? (optional)
+                    </label>
+                    <input
+                      type="text"
+                      value={ingBagUnitLabel}
+                      onChange={(e) => setIngBagUnitLabel(e.target.value)}
+                      placeholder="e.g. 2kg packet, 1 chicken, 1 gorogoro bucket"
+                      className="w-full bg-zinc-950 border border-zinc-700 rounded-xl px-3 py-2.5 text-xs text-white font-mono focus:outline-none focus:border-orange-500"
+                    />
+                  </div>
+                </>
+              )}
 
               <div className="grid grid-cols-2 gap-2">
                 <div>
@@ -736,7 +909,82 @@ export const StockMenuManager: React.FC = () => {
               onClick={handleAddIngredient}
               className="w-full py-3.5 bg-orange-500 hover:bg-orange-400 active:scale-[0.98] text-zinc-950 font-mono font-bold uppercase tracking-wider text-xs rounded-2xl transition shadow-lg shadow-orange-500/20"
             >
-              Add Ingredient
+              {ingMode === 'existing' ? 'Stock Ingredient' : 'Add Ingredient'}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Edit Ingredient Modal */}
+      {editingIngredient && (
+        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/70 backdrop-blur-sm p-4">
+          <div className="relative w-full max-w-sm bg-[#0f1117] border border-zinc-800 rounded-3xl p-5 shadow-2xl space-y-4">
+            <div className="flex items-center justify-between">
+              <h3 className="font-mono text-xs font-bold text-white uppercase tracking-wider">
+                Edit {editingIngredient.name}
+              </h3>
+              <button
+                onClick={() => setEditingIngredient(null)}
+                className="p-1.5 rounded-lg bg-zinc-900 hover:bg-zinc-800 text-zinc-400 border border-zinc-800"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
+
+            <p className="text-[10px] font-mono text-zinc-500">
+              Quantity and cost are edited from Restock — this is just the ingredient's name and definition.
+            </p>
+
+            <div className="space-y-3">
+              <div>
+                <label className="text-[10px] font-mono text-zinc-500 uppercase tracking-widest mb-1 block">Name</label>
+                <input
+                  type="text"
+                  autoFocus
+                  value={editIngName}
+                  onChange={(e) => setEditIngName(e.target.value)}
+                  className="w-full bg-zinc-950 border border-zinc-700 rounded-xl px-3 py-2.5 text-xs text-white font-mono focus:outline-none focus:border-orange-500"
+                />
+              </div>
+
+              <div>
+                <label className="text-[10px] font-mono text-zinc-500 uppercase tracking-widest mb-1 block">
+                  What's a bag? (optional)
+                </label>
+                <input
+                  type="text"
+                  value={editIngBagUnitLabel}
+                  onChange={(e) => setEditIngBagUnitLabel(e.target.value)}
+                  placeholder="e.g. 2kg packet, 1 chicken, 1 gorogoro bucket"
+                  className="w-full bg-zinc-950 border border-zinc-700 rounded-xl px-3 py-2.5 text-xs text-white font-mono focus:outline-none focus:border-orange-500"
+                />
+              </div>
+
+              <div>
+                <label className="text-[10px] font-mono text-zinc-500 uppercase tracking-widest mb-1 block">
+                  Low Stock Threshold (bags)
+                </label>
+                <input
+                  type="number"
+                  inputMode="decimal"
+                  value={editIngThreshold}
+                  onChange={(e) => setEditIngThreshold(e.target.value)}
+                  className="w-full bg-zinc-950 border border-zinc-700 rounded-xl px-3 py-2.5 text-xs text-white font-mono focus:outline-none focus:border-orange-500"
+                />
+              </div>
+
+              {editIngError && (
+                <p className="text-[11px] font-mono text-red-400 bg-red-500/10 border border-red-500/20 rounded-lg px-3 py-2">
+                  {editIngError}
+                </p>
+              )}
+            </div>
+
+            <button
+              onClick={handleSaveIngredientEdit}
+              className="w-full py-3.5 bg-orange-500 hover:bg-orange-400 active:scale-[0.98] text-zinc-950 font-mono font-bold uppercase tracking-wider text-xs rounded-2xl transition shadow-lg shadow-orange-500/20"
+            >
+              Save Changes
             </button>
           </div>
         </div>
@@ -851,6 +1099,27 @@ export const StockMenuManager: React.FC = () => {
                   placeholder="0"
                   className="w-full bg-zinc-950 border border-zinc-700 rounded-xl px-3 py-2.5 text-xs text-white font-mono focus:outline-none focus:border-orange-500"
                 />
+              </div>
+
+              <div>
+                <label className="text-[10px] font-mono text-zinc-500 uppercase tracking-widest mb-1 block">
+                  Category
+                </label>
+                <div className="grid grid-cols-3 gap-1.5">
+                  {CATEGORIES.map((c) => (
+                    <button
+                      key={c}
+                      onClick={() => setDishCategory(c)}
+                      className={`py-2 text-[10px] font-mono font-bold uppercase rounded-lg border transition ${
+                        dishCategory === c
+                          ? 'bg-orange-500 text-zinc-950 border-orange-400'
+                          : 'bg-zinc-800 text-zinc-400 border-zinc-700'
+                      }`}
+                    >
+                      {CATEGORY_LABELS[c]}
+                    </button>
+                  ))}
+                </div>
               </div>
 
               <div>

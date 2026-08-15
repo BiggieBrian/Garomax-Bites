@@ -45,6 +45,8 @@ export interface IngredientStock {
   synced?: boolean;
 }
 
+export type DishCategory = 'drinks' | 'snacks' | 'meals';
+
 // Menu is shared across branches — unchanged from the single-branch schema.
 // `servings_per_bag` replaces the old exact-weight `quantity_per_plate`:
 // "one bag of this ingredient makes N plates of this dish." Optional/blank
@@ -55,6 +57,7 @@ export interface RecipeItem {
   selling_price: number;
   ingredient_id: string;
   servings_per_bag?: number;
+  category: DishCategory;
   synced?: boolean;
 }
 
@@ -137,9 +140,10 @@ export interface Supply {
   branch_id: string;
   name: string;
   unit_label: string; // free text, e.g. "5L jerrican", "13kg cylinder"
-  restock_interval_days: number;
+  restock_interval_days: number; // expected cadence; can be adjusted at each restock as buying patterns change
   last_restocked_at?: string; // ISO date of the most recent restock
   last_restock_cost?: number; // what that restock cost — feeds Expenses
+  last_restock_quantity?: string; // free text, e.g. "10kg" — amount bought varies restock to restock
   notes?: string;
   synced?: boolean;
 }

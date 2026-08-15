@@ -202,6 +202,7 @@ const recipeToRow = (r: RecipeItem) => ({
   ingredient_id: r.ingredient_id,
   selling_price: r.selling_price,
   servings_per_bag: r.servings_per_bag ?? null,
+  category: r.category,
 });
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -210,6 +211,7 @@ const recipeFromRow = (r: any): RecipeItem => ({
   ingredient_id: r.ingredient_id,
   selling_price: r.selling_price,
   servings_per_bag: r.servings_per_bag ?? undefined,
+  category: r.category ?? 'meals',
   synced: true,
 });
 
@@ -271,6 +273,7 @@ const supplyToRow = (s: Supply) => ({
   restock_interval_days: s.restock_interval_days,
   last_restocked_at: s.last_restocked_at ?? null,
   last_restock_cost: s.last_restock_cost ?? null,
+  last_restock_quantity: s.last_restock_quantity ?? null,
   notes: s.notes ?? null,
 });
 
@@ -283,6 +286,7 @@ const supplyFromRow = (r: any): Supply => ({
   restock_interval_days: r.restock_interval_days,
   last_restocked_at: r.last_restocked_at ?? undefined,
   last_restock_cost: r.last_restock_cost ?? undefined,
+  last_restock_quantity: r.last_restock_quantity ?? undefined,
   notes: r.notes ?? undefined,
   synced: true,
 });

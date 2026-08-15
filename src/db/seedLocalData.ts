@@ -54,9 +54,9 @@ export async function seedInitialData() {
     // Seed default recipes — shared menu, same at every branch.
     // `servings_per_bag`: "one bag/unit of this ingredient makes N plates."
     await db.recipes.bulkAdd([
-      { dish_name: 'Ugali', selling_price: 50, ingredient_id: 'i1', servings_per_bag: 5 },
-      { dish_name: 'Chips', selling_price: 120, ingredient_id: 'i2', servings_per_bag: 3 },
-      { dish_name: 'Chips', selling_price: 120, ingredient_id: 'i3', servings_per_bag: 20 },
+      { dish_name: 'Ugali', selling_price: 50, ingredient_id: 'i1', servings_per_bag: 5, category: 'meals' },
+      { dish_name: 'Chips', selling_price: 120, ingredient_id: 'i2', servings_per_bag: 3, category: 'meals' },
+      { dish_name: 'Chips', selling_price: 120, ingredient_id: 'i3', servings_per_bag: 20, category: 'meals' },
     ]);
 
     console.log('Garomax Bites local IndexedDB seeded (local-only demo mode).');
