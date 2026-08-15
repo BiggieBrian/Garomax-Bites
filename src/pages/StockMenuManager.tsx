@@ -578,7 +578,7 @@ export const StockMenuManager: React.FC = () => {
           </button>
         </div>
 
-        {incompleteDishNames.size > 0 && (
+        {/* {incompleteDishNames.size > 0 && (
           <div className="flex items-start gap-2 bg-red-500/5 border border-red-500/20 rounded-xl p-2.5">
             <AlertTriangle className="w-3.5 h-3.5 text-red-400 mt-0.5 shrink-0" />
             <p className="text-[10px] font-mono text-red-300">
@@ -587,7 +587,7 @@ export const StockMenuManager: React.FC = () => {
              ingredient until it's filled in below.
             </p>
           </div>
-        )}
+        )} */}
 
 
         {(ingredients ?? []).length === 0 && (
