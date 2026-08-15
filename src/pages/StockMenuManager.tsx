@@ -765,8 +765,8 @@ export const StockMenuManager: React.FC = () => {
 
       {/* Add Ingredient Modal */}
       {showIngredientForm && (
-        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/70 backdrop-blur-sm p-4">
-          <div className="relative w-full max-w-sm bg-[#0f1117] border border-zinc-800 rounded-3xl p-5 shadow-2xl space-y-4">
+        <div className="fixed inset-0 z-50 flex items-start sm:items-center justify-center overflow-y-auto bg-black/70 backdrop-blur-sm p-4 pt-10 sm:pt-4 pb-10">
+          <div className="relative w-full max-w-sm bg-[#0f1117] border border-zinc-800 rounded-3xl p-5 shadow-2xl space-y-4 max-h-[85vh] overflow-y-auto">
             <div className="flex items-center justify-between">
               <h3 className="font-mono text-xs font-bold text-white uppercase tracking-wider">Add Ingredient</h3>
               <button
@@ -917,8 +917,8 @@ export const StockMenuManager: React.FC = () => {
 
       {/* Edit Ingredient Modal */}
       {editingIngredient && (
-        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/70 backdrop-blur-sm p-4">
-          <div className="relative w-full max-w-sm bg-[#0f1117] border border-zinc-800 rounded-3xl p-5 shadow-2xl space-y-4">
+        <div className="fixed inset-0 z-50 flex items-start sm:items-center justify-center overflow-y-auto bg-black/70 backdrop-blur-sm p-4 pt-10 sm:pt-4 pb-10">
+          <div className="relative w-full max-w-sm bg-[#0f1117] border border-zinc-800 rounded-3xl p-5 shadow-2xl space-y-4 max-h-[85vh] overflow-y-auto">
             <div className="flex items-center justify-between">
               <h3 className="font-mono text-xs font-bold text-white uppercase tracking-wider">
                 Edit {editingIngredient.name}
@@ -992,8 +992,8 @@ export const StockMenuManager: React.FC = () => {
 
       {/* Restock Modal */}
       {restockTarget && (
-        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/70 backdrop-blur-sm p-4">
-          <div className="relative w-full max-w-sm bg-[#0f1117] border border-zinc-800 rounded-3xl p-5 shadow-2xl space-y-4">
+        <div className="fixed inset-0 z-50 flex items-start sm:items-center justify-center overflow-y-auto bg-black/70 backdrop-blur-sm p-4 pt-10 sm:pt-4 pb-10">
+          <div className="relative w-full max-w-sm bg-[#0f1117] border border-zinc-800 rounded-3xl p-5 shadow-2xl space-y-4 max-h-[85vh] overflow-y-auto">
             <div className="flex items-center justify-between">
               <h3 className="font-mono text-xs font-bold text-white uppercase tracking-wider">
                 Restock {restockTarget.name}
@@ -1058,7 +1058,7 @@ export const StockMenuManager: React.FC = () => {
 
       {/* Add Dish Modal */}
       {showDishForm && (
-        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/70 backdrop-blur-sm p-4">
+        <div className="fixed inset-0 z-50 flex items-start sm:items-center justify-center overflow-y-auto bg-black/70 backdrop-blur-sm p-4 pt-10 sm:pt-4 pb-10">
           <div className="relative w-full max-w-sm bg-[#0f1117] border border-zinc-800 rounded-3xl p-5 shadow-2xl space-y-4 max-h-[85vh] overflow-y-auto">
             <div className="flex items-center justify-between">
               <h3 className="font-mono text-xs font-bold text-white uppercase tracking-wider">Add Dish</h3>

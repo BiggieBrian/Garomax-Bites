@@ -5,8 +5,11 @@ import { requestSync } from '../db/sync';
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
 import { useAuth } from '../context/AuthContext';
 import { SalesTargetBadge } from '../components/SalesTargetBadge';
-import type { Order, OrderItem, PaymentMethod } from '../types';
-import { Plus, Minus, Send, Clock, CheckCircle, ShoppingBag, Flame, ChefHat, Mail, MessageSquareText, X } from 'lucide-react';
+import type { Order, OrderItem, PaymentMethod, DishCategory } from '../types';
+import { Plus, Minus, Send, Clock, CheckCircle, ShoppingBag, Flame, ChefHat, Mail, MessageSquareText, X, Search } from 'lucide-react';
+
+const CATEGORIES: DishCategory[] = ['meals', 'snacks', 'drinks'];
+const CATEGORY_LABELS: Record<DishCategory, string> = { meals: 'Meals', snacks: 'Snacks', drinks: 'Drinks' };
 
 export const WaiterPOS: React.FC = () => {
   const { currentUser } = useAuth();
@@ -26,6 +29,17 @@ export const WaiterPOS: React.FC = () => {
   const dishes = Array.from(
     new Map(recipes?.map((r) => [r.dish_name, r])).values()
   );
+
+  // Menu search + category filter — the dish grid can get long, and the
+  // cart used to always sit below the *entire* menu, so narrowing the grid
+  // is what keeps the open ticket within easy reach.
+  const [menuSearch, setMenuSearch] = useState('');
+  const [menuCategory, setMenuCategory] = useState<DishCategory | 'all'>('all');
+  const filteredDishes = dishes.filter((d) => {
+    const matchesCategory = menuCategory === 'all' || d.category === menuCategory;
+    const matchesSearch = !menuSearch.trim() || d.dish_name.toLowerCase().includes(menuSearch.trim().toLowerCase());
+    return matchesCategory && matchesSearch;
+  });
 
   // Cart state
   const [cart, setCart] = useState<OrderItem[]>([]);
@@ -202,9 +216,41 @@ export const WaiterPOS: React.FC = () => {
       {/* TAB 1: MENU & ORDER ENTRY */}
       {activeTab === 'menu' && (
         <div className="space-y-4">
+          {/* Search + Category Tabs */}
+          <div className="space-y-2">
+            <div className="relative">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-500" />
+              <input
+                type="text"
+                value={menuSearch}
+                onChange={(e) => setMenuSearch(e.target.value)}
+                placeholder="Search menu..."
+                className="w-full bg-[#0f1117] border border-zinc-800 rounded-xl pl-9 pr-3 py-2.5 text-sm text-white placeholder:text-zinc-600 focus:outline-none focus:border-orange-500/50"
+              />
+            </div>
+            <div className="flex gap-1.5">
+              {(['all', ...CATEGORIES] as const).map((c) => (
+                <button
+                  key={c}
+                  onClick={() => setMenuCategory(c)}
+                  className={`flex-1 py-1.5 text-[10px] font-mono font-bold uppercase tracking-wider rounded-lg border transition ${
+                    menuCategory === c
+                      ? 'bg-orange-500 text-zinc-950 border-orange-400'
+                      : 'bg-zinc-900/60 text-zinc-500 border-zinc-800'
+                  }`}
+                >
+                  {c === 'all' ? 'All' : CATEGORY_LABELS[c]}
+                </button>
+              ))}
+            </div>
+          </div>
+
           {/* Menu Grid */}
-          <div className="grid grid-cols-2 gap-3">
-            {dishes.map((dish) => (
+          {filteredDishes.length === 0 ? (
+            <p className="text-zinc-600 text-xs font-mono text-center py-8">No dishes match your search</p>
+          ) : (
+            <div className="grid grid-cols-2 gap-3">
+              {filteredDishes.map((dish) => (
               <button
                 key={dish.dish_name}
                 onClick={() => addToCart(dish.dish_name, dish.selling_price)}
@@ -227,7 +273,8 @@ export const WaiterPOS: React.FC = () => {
                 </div>
               </button>
             ))}
-          </div>
+            </div>
+          )}
 
           {/* Cart Tray (Appears when items are selected) */}
           {cart.length > 0 && (
