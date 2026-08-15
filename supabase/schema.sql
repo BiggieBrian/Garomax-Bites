@@ -40,6 +40,14 @@ create table if not exists ingredients (
   bag_unit_label text -- what one bag actually is, e.g. "2kg packet", "1 chicken"
 );
 
+-- Shared "untracked" placeholder — dishes like tea/coffee point their one
+-- recipe line at this instead of a real ingredient, so they can exist and
+-- sell with no stock tracking at all. See UNTRACKED_INGREDIENT_ID in
+-- StockMenuManager.tsx.
+insert into ingredients (ingredient_id, name, unit, bag_unit_label)
+values ('__untracked__', 'No Ingredient (Untracked Dish)', 'pcs', null)
+on conflict (ingredient_id) do nothing;
+
 create table if not exists ingredient_stock (
   branch_id text not null references branches(branch_id),
   ingredient_id text not null references ingredients(ingredient_id) on delete cascade,

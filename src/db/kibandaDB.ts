@@ -161,6 +161,20 @@ export class KibandaDatabase extends Dexie {
         if (!r.category) r.category = 'meals';
       });
     });
+
+    // v10: seed the shared "untracked" placeholder ingredient (see
+    // UNTRACKED_INGREDIENT_ID in StockMenuManager.tsx) locally, so dishes
+    // like tea/coffee that deliberately track no stock have something valid
+    // to reference even before this device's first sync from Supabase pulls
+    // the same row down. `put` rather than `add` — safe to run whether or
+    // not it already exists.
+    this.version(10).stores({}).upgrade(async (tx) => {
+      await tx.table('ingredients').put({
+        ingredient_id: '__untracked__',
+        name: 'No Ingredient (Untracked Dish)',
+        unit: 'pcs',
+      });
+    });
   }
 }
 

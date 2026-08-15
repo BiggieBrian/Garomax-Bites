@@ -42,6 +42,9 @@ export async function seedInitialData() {
       { ingredient_id: 'i1', name: 'Unga (Maize Flour)', unit: 'kg' },
       { ingredient_id: 'i2', name: 'Potatoes (Viazi)', unit: 'kg' },
       { ingredient_id: 'i3', name: 'Cooking Oil', unit: 'l' },
+      // Shared placeholder for "untracked" dishes (tea, coffee, etc.) — see
+      // UNTRACKED_INGREDIENT_ID in StockMenuManager.tsx.
+      { ingredient_id: '__untracked__', name: 'No Ingredient (Untracked Dish)', unit: 'pcs' },
     ]);
 
     // ... plus per-branch stock levels for the one demo branch.

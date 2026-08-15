@@ -36,6 +36,14 @@ const money = (n: number) => `KES ${n.toLocaleString(undefined, { maximumFractio
 const CATEGORIES: DishCategory[] = ['meals', 'snacks', 'drinks'];
 const CATEGORY_LABELS: Record<DishCategory, string> = { meals: 'Meals', snacks: 'Snacks', drinks: 'Drinks' };
 
+// A single reserved, shared ingredient every "untracked" dish (tea, coffee,
+// anything made of things too small/cheap to weigh) points at instead of a
+// real ingredient. It's never stocked by any branch, so the deduction step
+// simply finds no match and skips it — same mechanism that already handles
+// "ingredient not stocked at this branch" everywhere else in the app. No
+// schema change: it's just one seeded row reused across every such dish.
+export const UNTRACKED_INGREDIENT_ID = '__untracked__';
+
 export const StockMenuManager: React.FC = () => {
   const myBranchId = useActiveBranchId();
 
@@ -73,7 +81,9 @@ export const StockMenuManager: React.FC = () => {
   // instead of creating a duplicate identity via "Add Ingredient".
   const unstockedIngredients: Ingredient[] = useMemo(() => {
     const stockedIds = new Set(ingredients.map((i) => i.ingredient_id));
-    return (ingredientDefs ?? []).filter((d) => !stockedIds.has(d.ingredient_id));
+    return (ingredientDefs ?? []).filter(
+      (d) => !stockedIds.has(d.ingredient_id) && d.ingredient_id !== UNTRACKED_INGREDIENT_ID
+    );
   }, [ingredientDefs, ingredients]);
 
   const dishes = useMemo(() => {
@@ -264,6 +274,7 @@ export const StockMenuManager: React.FC = () => {
   const [dishName, setDishName] = useState('');
   const [dishPrice, setDishPrice] = useState('');
   const [dishCategory, setDishCategory] = useState<DishCategory>('meals');
+  const [dishNoIngredients, setDishNoIngredients] = useState(false);
   const [dishLines, setDishLines] = useState<{ ingredient_id: string; servings_per_bag: string }[]>([
     { ingredient_id: '', servings_per_bag: '' },
   ]);
@@ -273,6 +284,7 @@ export const StockMenuManager: React.FC = () => {
     setDishName('');
     setDishPrice('');
     setDishCategory('meals');
+    setDishNoIngredients(false);
     setDishLines([{ ingredient_id: '', servings_per_bag: '' }]);
     setDishError('');
   };
@@ -289,6 +301,21 @@ export const StockMenuManager: React.FC = () => {
       return setDishError('A dish with that name already exists.');
     const price = parseFloat(dishPrice);
     if (isNaN(price) || price <= 0) return setDishError('Enter a valid selling price.');
+
+    if (dishNoIngredients) {
+      await db.recipes.add({
+        dish_name: name,
+        selling_price: price,
+        ingredient_id: UNTRACKED_INGREDIENT_ID,
+        servings_per_bag: undefined,
+        category: dishCategory,
+        synced: false,
+      });
+      requestSync();
+      resetDishForm();
+      setShowDishForm(false);
+      return;
+    }
 
     const validLines = dishLines.filter((l) => l.ingredient_id);
     if (validLines.length === 0) return setDishError('Add at least one ingredient.');
@@ -661,15 +688,18 @@ export const StockMenuManager: React.FC = () => {
                     {/* Ingredient composition */}
                     <div className="space-y-1">
                       {dish.lines.map((line) => {
+                        const isUntracked = line.ingredient_id === UNTRACKED_INGREDIENT_ID;
                         const ing = ingredientMap.get(line.ingredient_id);
                         return (
                           <div
                             key={line.ingredient_id}
                             className="flex items-center justify-between text-[10px] font-mono text-zinc-400 bg-zinc-950/60 px-2 py-1 rounded-lg"
                           >
-                            <span>{ing?.name ?? 'Unknown ingredient'}</span>
+                            <span>{isUntracked ? 'No ingredients tracked' : ing?.name ?? 'Unknown ingredient'}</span>
                             <div className="flex items-center gap-2">
-                              {line.servings_per_bag ? (
+                              {isUntracked ? (
+                                <span className="text-zinc-600">untracked</span>
+                              ) : line.servings_per_bag ? (
                               <span>{line.servings_per_bag}/bag</span>
                             ) : (
                               <span className="text-red-400 flex items-center gap-1">
@@ -1122,54 +1152,68 @@ export const StockMenuManager: React.FC = () => {
                 </div>
               </div>
 
-              <div>
-                <label className="text-[10px] font-mono text-zinc-500 uppercase tracking-widest mb-1 block">
-                  Recipe (1 bag makes ___ plates)
-                </label>
-                <p className="text-[9px] font-mono text-zinc-600 mb-2">
-                  Leave the number blank if you don't know the yield yet — the dish can still be
-                  created and sold, that ingredient just won't deduct stock until it's filled in.
-                </p>
-                <div className="space-y-2">
-                  {dishLines.map((line, idx) => (
-                    <div key={idx} className="flex items-center gap-1.5">
-                      <select
-                        value={line.ingredient_id}
-                        onChange={(e) => updateDishLine(idx, 'ingredient_id', e.target.value)}
-                        className="flex-1 bg-zinc-950 border border-zinc-700 rounded-lg px-2 py-2 text-[11px] text-white font-mono focus:outline-none focus:border-orange-500"
-                      >
-                        <option value="">Ingredient...</option>
-                        {(ingredients ?? []).map((i) => (
-                          <option key={i.ingredient_id} value={i.ingredient_id}>
-                            {i.name}
-                          </option>
-                        ))}
-                      </select>
-                      <input
-                        type="number"
-                        placeholder="Servings/bag"
-                        value={line.servings_per_bag}
-                        onChange={(e) => updateDishLine(idx, 'servings_per_bag', e.target.value)}
-                        className="w-24 bg-zinc-950 border border-zinc-700 rounded-lg px-2 py-2 text-[11px] text-white font-mono focus:outline-none focus:border-orange-500"
-                      />
-                      {dishLines.length > 1 && (
-                        <button
-                          onClick={() => setDishLines((prev) => prev.filter((_, i) => i !== idx))}
-                          className="p-2 rounded-lg bg-zinc-800 text-zinc-400 hover:text-red-400"
+              <label className="flex items-center gap-2 py-1 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={dishNoIngredients}
+                  onChange={(e) => setDishNoIngredients(e.target.checked)}
+                  className="w-4 h-4 accent-orange-500"
+                />
+                <span className="text-[10px] font-mono text-zinc-400 uppercase tracking-widest">
+                  No ingredients to track (e.g. tea, coffee — nothing here deducts stock)
+                </span>
+              </label>
+
+              {!dishNoIngredients && (
+                <div>
+                  <label className="text-[10px] font-mono text-zinc-500 uppercase tracking-widest mb-1 block">
+                    Recipe (1 bag makes ___ plates)
+                  </label>
+                  <p className="text-[9px] font-mono text-zinc-600 mb-2">
+                    Leave the number blank if you don't know the yield yet — the dish can still be
+                    created and sold, that ingredient just won't deduct stock until it's filled in.
+                  </p>
+                  <div className="space-y-2">
+                    {dishLines.map((line, idx) => (
+                      <div key={idx} className="flex items-center gap-1.5">
+                        <select
+                          value={line.ingredient_id}
+                          onChange={(e) => updateDishLine(idx, 'ingredient_id', e.target.value)}
+                          className="flex-1 bg-zinc-950 border border-zinc-700 rounded-lg px-2 py-2 text-[11px] text-white font-mono focus:outline-none focus:border-orange-500"
                         >
-                          <X className="w-3.5 h-3.5" />
-                        </button>
-                      )}
-                    </div>
-                  ))}
+                          <option value="">Ingredient...</option>
+                          {(ingredients ?? []).map((i) => (
+                            <option key={i.ingredient_id} value={i.ingredient_id}>
+                              {i.name}
+                            </option>
+                          ))}
+                        </select>
+                        <input
+                          type="number"
+                          placeholder="Servings/bag"
+                          value={line.servings_per_bag}
+                          onChange={(e) => updateDishLine(idx, 'servings_per_bag', e.target.value)}
+                          className="w-24 bg-zinc-950 border border-zinc-700 rounded-lg px-2 py-2 text-[11px] text-white font-mono focus:outline-none focus:border-orange-500"
+                        />
+                        {dishLines.length > 1 && (
+                          <button
+                            onClick={() => setDishLines((prev) => prev.filter((_, i) => i !== idx))}
+                            className="p-2 rounded-lg bg-zinc-800 text-zinc-400 hover:text-red-400"
+                          >
+                            <X className="w-3.5 h-3.5" />
+                          </button>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                  <button
+                    onClick={() => setDishLines((prev) => [...prev, { ingredient_id: '', servings_per_bag: '' }])}
+                    className="mt-2 text-[10px] font-mono text-zinc-500 hover:text-orange-400 flex items-center gap-1"
+                  >
+                    <Plus className="w-3 h-3" /> Add ingredient line
+                  </button>
                 </div>
-                <button
-                  onClick={() => setDishLines((prev) => [...prev, { ingredient_id: '', servings_per_bag: '' }])}
-                  className="mt-2 text-[10px] font-mono text-zinc-500 hover:text-orange-400 flex items-center gap-1"
-                >
-                  <Plus className="w-3 h-3" /> Add ingredient line
-                </button>
-              </div>
+              )}
 
               {dishError && (
                 <p className="text-[11px] font-mono text-red-400 bg-red-500/10 border border-red-500/20 rounded-lg px-3 py-2">
