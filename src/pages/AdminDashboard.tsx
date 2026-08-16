@@ -4,14 +4,14 @@ import { db } from '../db/kibandaDB';
 import { requestSync, deleteUserRemote } from '../db/sync';
 import { useAuth } from '../context/AuthContext';
 import { useActiveBranchId } from '../context/BranchScopeContext';
-import { StockMenuManager } from './StockMenuManager';
+import { StockMenuManager, UNTRACKED_INGREDIENT_ID } from './StockMenuManager';
 import { FixedAssetsManager } from './FixedAssetsManager';
 import { SalesTargetManager } from '../components/SalesTargetManager';
 import { SuppliesManager } from '../components/SuppliesManager';
 import { Pagination } from '../components/Pagination';
 import { usePagination } from '../components/usePagination';
 import { SearchInput } from '../components/SearchInput';
-import type { StaffLedger, User, UserRole } from '../types';
+import type { StaffLedger, User, UserRole, RecipeItem } from '../types';
 import {
   ClipboardList,
   Users,
@@ -65,6 +65,23 @@ export const AdminDashboard: React.FC = () => {
     () => (allIngredientStock ?? []).filter((s) => s.branch_id === myBranchId),
     [allIngredientStock, myBranchId]
   );
+  const ingredientCostMap = useMemo(
+    () => new Map(ingredientStockRows.map((s) => [s.ingredient_id, s.last_purchase_cost])),
+    [ingredientStockRows]
+  );
+
+  // Menu is shared across branches — used here purely to cost out what was
+  // sold (see ingredientCOGS in `sales` below), not to filter by branch.
+  const recipes = useLiveQuery(() => db.recipes.toArray(), []);
+  const recipesByDish = useMemo(() => {
+    const map = new Map<string, RecipeItem[]>();
+    (recipes ?? []).forEach((r) => {
+      const arr = map.get(r.dish_name) ?? [];
+      arr.push(r);
+      map.set(r.dish_name, arr);
+    });
+    return map;
+  }, [recipes]);
 
   const allLedgers = useLiveQuery(
     () => db.staffLedgers.orderBy('date').reverse().toArray(),
@@ -107,12 +124,13 @@ export const AdminDashboard: React.FC = () => {
   // week/month — avoids "it's only Tuesday" half-empty-week confusion.
   //
   // Expenses here = payroll deductions actually applied in the window +
-  // supplies restocked in the window. Deliberately NOT included yet:
-  // ingredient cost-of-goods-sold (waiting on the bag/servings-per-bag
-  // data to be costed) and fixed-asset purchases (one-off capex — shown
-  // separately so a furniture buy doesn't make a day's profit look bad).
-  // Once ingredient COGS is available this slots into the same `expenses`
-  // total without changing the shape of this calculation.
+  // supplies restocked in the window + ingredient cost-of-goods-sold for
+  // items actually sold in the window. Deliberately NOT included:
+  // fixed-asset purchases (one-off capex — shown separately so a furniture
+  // buy doesn't make a day's profit look bad). Ingredient COGS only counts
+  // items whose recipe lines have both a servings-per-bag and a known
+  // ingredient cost — anything still missing that data is tracked
+  // separately as `uncostedQuantity` rather than assumed to cost zero.
   // ---------------------------------------------------------------------
   const [salesPeriod, setSalesPeriod] = useState<'today' | 'week' | 'month'>('today');
 
@@ -171,7 +189,32 @@ export const AdminDashboard: React.FC = () => {
     );
     const suppliesExpense = suppliesInPeriod.reduce((sum, s) => sum + (s.last_restock_cost ?? 0), 0);
 
-    const expenses = payrollExpense + suppliesExpense;
+    // Ingredient cost-of-goods-sold: for each item actually sold in the
+    // window, cost out each of its recipe lines as
+    // (quantity sold × ingredient cost) ÷ servings per bag. Lines with no
+    // servings_per_bag set yet (including the untracked placeholder — see
+    // UNTRACKED_INGREDIENT_ID) or no cost on record for this branch simply
+    // can't be costed, so they're skipped and counted separately rather
+    // than silently treated as zero cost.
+    let ingredientCOGS = 0;
+    let uncostedQuantity = 0;
+    paidInPeriod.forEach((o) => {
+      o.items.forEach((it) => {
+        const lines = recipesByDish.get(it.dish_name) ?? [];
+        if (lines.length === 0) return; // dish since deleted from the menu — nothing to cost against
+        let anyLineCosted = false;
+        lines.forEach((line) => {
+          if (line.ingredient_id === UNTRACKED_INGREDIENT_ID) return;
+          const cost = ingredientCostMap.get(line.ingredient_id);
+          if (!line.servings_per_bag || line.servings_per_bag <= 0 || cost === undefined) return;
+          ingredientCOGS += (it.quantity * cost) / line.servings_per_bag;
+          anyLineCosted = true;
+        });
+        if (!anyLineCosted) uncostedQuantity += it.quantity;
+      });
+    });
+
+    const expenses = payrollExpense + suppliesExpense + ingredientCOGS;
     const profit = revenue - expenses;
 
     return {
@@ -186,10 +229,12 @@ export const AdminDashboard: React.FC = () => {
       lossValue,
       payrollExpense,
       suppliesExpense,
+      ingredientCOGS,
+      uncostedQuantity,
       expenses,
       profit,
     };
-  }, [orders, ledgers, branchSupplies, periodStartMs]);
+  }, [orders, ledgers, branchSupplies, periodStartMs, recipesByDish, ingredientCostMap]);
 
   const [itemsSearch, setItemsSearch] = useState('');
   const searchedItemsSold = useMemo(() => {
@@ -596,8 +641,17 @@ export const AdminDashboard: React.FC = () => {
               </div>
             </div>
             <p className="text-[9px] font-mono text-zinc-600 -mt-2">
-              Expenses: {money(sales.payrollExpense)} payroll deductions + {money(sales.suppliesExpense)} supplies restocked.
-              Ingredient cost isn't counted yet — pending the bag/servings setup.
+              Expenses: {money(sales.payrollExpense)} payroll deductions + {money(sales.suppliesExpense)} supplies
+              restocked + {money(sales.ingredientCOGS)} ingredient cost.
+              {sales.uncostedQuantity > 0 && (
+                <>
+                  {' '}
+                  <span className="text-amber-500">
+                    {sales.uncostedQuantity} item{sales.uncostedQuantity > 1 ? 's' : ''} sold couldn't be costed —
+                    missing servings/bag or ingredient cost.
+                  </span>
+                </>
+              )}
             </p>
 
             <div className="flex gap-2">
