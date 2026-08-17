@@ -32,10 +32,12 @@ import {
   LayoutGrid,
   Boxes,
   ShoppingBasket,
-  Clock3
+  Clock3,
+  ChevronDown
 } from 'lucide-react';
 
 const money = (n: number) => `KES ${n.toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
+const [expandedOrderId, setExpandedOrderId] = useState<string | null>(null);
 
 type AdminTab = 'overview' | 'stock' | 'assets' | 'supplies' | 'staff' | 'money' | 'reconciliation';
 
@@ -706,11 +708,10 @@ export const AdminDashboard: React.FC = () => {
                   <button
                     key={p}
                     onClick={() => setSalesPeriod(p)}
-                    className={`px-2 py-1 rounded-md font-mono text-[9px] font-bold uppercase tracking-wider transition ${
-                      salesPeriod === p
+                    className={`px-2 py-1 rounded-md font-mono text-[9px] font-bold uppercase tracking-wider transition ${salesPeriod === p
                         ? 'bg-orange-500 text-zinc-950'
                         : 'text-zinc-500 hover:text-white'
-                    }`}
+                      }`}
                   >
                     {p === 'today' ? 'Today' : p === 'week' ? '7d' : '30d'}
                   </button>
@@ -739,15 +740,13 @@ export const AdminDashboard: React.FC = () => {
                 <p className="text-red-400 font-mono font-bold text-sm">{money(sales.expenses)}</p>
               </div>
               <div
-                className={`bg-zinc-900/60 border rounded-xl p-2.5 text-center ${
-                  sales.profit >= 0 ? 'border-emerald-500/20' : 'border-red-500/20'
-                }`}
+                className={`bg-zinc-900/60 border rounded-xl p-2.5 text-center ${sales.profit >= 0 ? 'border-emerald-500/20' : 'border-red-500/20'
+                  }`}
               >
                 <p className="text-[9px] font-mono text-zinc-500 uppercase tracking-widest mb-1">Profit</p>
                 <p
-                  className={`font-mono font-bold text-sm ${
-                    sales.profit >= 0 ? 'text-emerald-400' : 'text-red-400'
-                  }`}
+                  className={`font-mono font-bold text-sm ${sales.profit >= 0 ? 'text-emerald-400' : 'text-red-400'
+                    }`}
                 >
                   {money(sales.profit)}
                 </p>
@@ -894,11 +893,10 @@ export const AdminDashboard: React.FC = () => {
               <button
                 key={opt.id}
                 onClick={() => { setStaffSort(opt.id); setStaffPage(1); }}
-                className={`flex-1 py-2 rounded-xl font-mono text-[10px] font-bold tracking-wider uppercase transition ${
-                  staffSort === opt.id
+                className={`flex-1 py-2 rounded-xl font-mono text-[10px] font-bold tracking-wider uppercase transition ${staffSort === opt.id
                     ? 'bg-orange-500 text-zinc-950 shadow-md shadow-orange-500/20'
                     : 'text-zinc-400 hover:text-white'
-                }`}
+                  }`}
               >
                 {opt.label}
               </button>
@@ -918,123 +916,122 @@ export const AdminDashboard: React.FC = () => {
               </p>
             ) : (
               pagedStaff.map((s) => {
-              const adminCount = (staff ?? []).filter((x) => x.role === 'admin').length;
-              const isSelf = currentUser?.user_id === s.user_id;
-              const isSuperAdminViewer = currentUser?.role === 'superadmin';
-              const isLastAdmin = !isSuperAdminViewer && s.role === 'admin' && adminCount <= 1;
-              const isConfirming = confirmDeleteStaff === s.user_id;
-              const deductions = staffDeductions.get(s.user_id) ?? 0;
-              const netPay = s.basic_salary - deductions;
-              const stats = staffStats.get(s.user_id);
-              const atRisk = staffAtRisk(s.user_id);
+                const adminCount = (staff ?? []).filter((x) => x.role === 'admin').length;
+                const isSelf = currentUser?.user_id === s.user_id;
+                const isSuperAdminViewer = currentUser?.role === 'superadmin';
+                const isLastAdmin = !isSuperAdminViewer && s.role === 'admin' && adminCount <= 1;
+                const isConfirming = confirmDeleteStaff === s.user_id;
+                const deductions = staffDeductions.get(s.user_id) ?? 0;
+                const netPay = s.basic_salary - deductions;
+                const stats = staffStats.get(s.user_id);
+                const atRisk = staffAtRisk(s.user_id);
 
-              return (
-                <div
-                  key={s.user_id}
-                  className="bg-zinc-900/60 p-2.5 rounded-xl border border-zinc-800/60"
-                >
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-2">
-                      <button
-                        onClick={() => toggleActiveShift(s.user_id, s.active_shift)}
-                        title={s.active_shift ? 'On shift — tap to deactivate' : 'Inactive — tap to reactivate'}
-                        className={`w-2 h-2 rounded-full transition ${
-                          s.active_shift ? 'bg-emerald-400 animate-pulse' : 'bg-zinc-600'
-                        }`}
-                      />
-                      <span className="text-xs font-medium text-white">{s.name}</span>
-                    </div>
-                    <div className="flex items-center gap-1.5">
-                      <span className="text-[9px] font-mono text-zinc-500 uppercase tracking-widest border border-zinc-800 px-1.5 py-0.5 rounded">
-                        {s.role}
-                      </span>
-                      <button
-                        onClick={() => openEditStaff(s)}
-                        title="Edit salary / role / PIN"
-                        className="p-1 rounded-lg bg-zinc-800 hover:bg-orange-500/20 text-zinc-400 hover:text-orange-400"
-                      >
-                        <Pencil className="w-3 h-3" />
-                      </button>
-                      {!isSelf && isLastAdmin && (
-                        <span title="Last remaining admin — protected from deletion">
-                          <ShieldAlert className="w-3.5 h-3.5 text-amber-400" />
-                        </span>
-                      )}
-                      {!isSelf && !isLastAdmin && (
+                return (
+                  <div
+                    key={s.user_id}
+                    className="bg-zinc-900/60 p-2.5 rounded-xl border border-zinc-800/60"
+                  >
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2">
                         <button
-                          onClick={() => setConfirmDeleteStaff(s.user_id)}
-                          title="Delete staff account"
-                          className="p-1 rounded-lg bg-zinc-800 hover:bg-red-500/20 text-zinc-400 hover:text-red-400"
-                        >
-                          <Trash2 className="w-3 h-3" />
-                        </button>
-                      )}
-                    </div>
-                  </div>
-
-                  <div className="mt-2 pt-2 border-t border-zinc-800/60 flex items-center justify-between">
-                    <span className="text-[10px] font-mono text-zinc-500 uppercase tracking-widest">
-                      Net Pay
-                    </span>
-                    <div className="text-right">
-                      <span className="font-mono font-bold text-sm text-emerald-400">{money(netPay)}</span>
-                      {deductions > 0 && (
-                        <p className="text-[9px] font-mono text-red-400">
-                          {money(s.basic_salary)} - {money(deductions)} deductions
-                        </p>
-                      )}
-                    </div>
-                  </div>
-
-                  <div className="mt-2 pt-2 border-t border-zinc-800/60 grid grid-cols-2 gap-2">
-                    <div>
-                      <p className="text-[9px] font-mono text-zinc-500 uppercase tracking-widest">Sales</p>
-                      <p className="font-mono font-bold text-xs text-white">{money(stats?.sales ?? 0)}</p>
-                      <p className="text-[9px] font-mono text-zinc-600">{stats?.ordersPlaced ?? 0} orders</p>
-                    </div>
-                    <div>
-                      <p className="text-[9px] font-mono text-zinc-500 uppercase tracking-widest">Confirmed (Kitchen)</p>
-                      <p className="font-mono font-bold text-xs text-white">{stats?.ordersConfirmed ?? 0}</p>
-                      <p className="text-[9px] font-mono text-zinc-600">orders prepared</p>
-                    </div>
-                  </div>
-
-                  {atRisk > 0 && (
-                    <div className="mt-2 pt-2 border-t border-zinc-800/60">
-                      <div className="flex items-center justify-between">
-                        <span className="text-[10px] font-mono text-amber-500 uppercase tracking-widest">
-                          Total At Risk
-                        </span>
-                        <span className="font-mono font-bold text-xs text-amber-400">{money(atRisk)}</span>
+                          onClick={() => toggleActiveShift(s.user_id, s.active_shift)}
+                          title={s.active_shift ? 'On shift — tap to deactivate' : 'Inactive — tap to reactivate'}
+                          className={`w-2 h-2 rounded-full transition ${s.active_shift ? 'bg-emerald-400 animate-pulse' : 'bg-zinc-600'
+                            }`}
+                        />
+                        <span className="text-xs font-medium text-white">{s.name}</span>
                       </div>
-                      <p className="text-[9px] font-mono text-zinc-600 mt-0.5">
-                        {deductions > 0 && `${money(deductions)} deductions`}
-                        {deductions > 0 && ((stats?.openTicketsValue ?? 0) > 0 || (stats?.creditValue ?? 0) > 0) && ' · '}
-                        {(stats?.openTicketsValue ?? 0) > 0 && `${money(stats!.openTicketsValue)} unpaid tickets`}
-                        {(stats?.openTicketsValue ?? 0) > 0 && (stats?.creditValue ?? 0) > 0 && ' · '}
-                        {(stats?.creditValue ?? 0) > 0 && `${money(stats!.creditValue)} on credit`}
-                      </p>
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-[9px] font-mono text-zinc-500 uppercase tracking-widest border border-zinc-800 px-1.5 py-0.5 rounded">
+                          {s.role}
+                        </span>
+                        <button
+                          onClick={() => openEditStaff(s)}
+                          title="Edit salary / role / PIN"
+                          className="p-1 rounded-lg bg-zinc-800 hover:bg-orange-500/20 text-zinc-400 hover:text-orange-400"
+                        >
+                          <Pencil className="w-3 h-3" />
+                        </button>
+                        {!isSelf && isLastAdmin && (
+                          <span title="Last remaining admin — protected from deletion">
+                            <ShieldAlert className="w-3.5 h-3.5 text-amber-400" />
+                          </span>
+                        )}
+                        {!isSelf && !isLastAdmin && (
+                          <button
+                            onClick={() => setConfirmDeleteStaff(s.user_id)}
+                            title="Delete staff account"
+                            className="p-1 rounded-lg bg-zinc-800 hover:bg-red-500/20 text-zinc-400 hover:text-red-400"
+                          >
+                            <Trash2 className="w-3 h-3" />
+                          </button>
+                        )}
+                      </div>
                     </div>
-                  )}
 
-                  {isConfirming && (
-                    <div className="mt-2 pt-2 border-t border-zinc-800/60 flex gap-2">
-                      <button
-                        onClick={() => setConfirmDeleteStaff(null)}
-                        className="flex-1 py-1.5 bg-zinc-800 text-zinc-400 rounded-lg font-mono text-[10px] font-bold uppercase"
-                      >
-                        Cancel
-                      </button>
-                      <button
-                        onClick={() => handleDeleteStaff(s.user_id)}
-                        className="flex-1 py-1.5 bg-red-500/20 text-red-400 border border-red-500/30 rounded-lg font-mono text-[10px] font-bold uppercase"
-                      >
-                        Confirm Delete
-                      </button>
+                    <div className="mt-2 pt-2 border-t border-zinc-800/60 flex items-center justify-between">
+                      <span className="text-[10px] font-mono text-zinc-500 uppercase tracking-widest">
+                        Net Pay
+                      </span>
+                      <div className="text-right">
+                        <span className="font-mono font-bold text-sm text-emerald-400">{money(netPay)}</span>
+                        {deductions > 0 && (
+                          <p className="text-[9px] font-mono text-red-400">
+                            {money(s.basic_salary)} - {money(deductions)} deductions
+                          </p>
+                        )}
+                      </div>
                     </div>
-                  )}
-                </div>
-              );
+
+                    <div className="mt-2 pt-2 border-t border-zinc-800/60 grid grid-cols-2 gap-2">
+                      <div>
+                        <p className="text-[9px] font-mono text-zinc-500 uppercase tracking-widest">Sales</p>
+                        <p className="font-mono font-bold text-xs text-white">{money(stats?.sales ?? 0)}</p>
+                        <p className="text-[9px] font-mono text-zinc-600">{stats?.ordersPlaced ?? 0} orders</p>
+                      </div>
+                      <div>
+                        <p className="text-[9px] font-mono text-zinc-500 uppercase tracking-widest">Confirmed (Kitchen)</p>
+                        <p className="font-mono font-bold text-xs text-white">{stats?.ordersConfirmed ?? 0}</p>
+                        <p className="text-[9px] font-mono text-zinc-600">orders prepared</p>
+                      </div>
+                    </div>
+
+                    {atRisk > 0 && (
+                      <div className="mt-2 pt-2 border-t border-zinc-800/60">
+                        <div className="flex items-center justify-between">
+                          <span className="text-[10px] font-mono text-amber-500 uppercase tracking-widest">
+                            Total At Risk
+                          </span>
+                          <span className="font-mono font-bold text-xs text-amber-400">{money(atRisk)}</span>
+                        </div>
+                        <p className="text-[9px] font-mono text-zinc-600 mt-0.5">
+                          {deductions > 0 && `${money(deductions)} deductions`}
+                          {deductions > 0 && ((stats?.openTicketsValue ?? 0) > 0 || (stats?.creditValue ?? 0) > 0) && ' · '}
+                          {(stats?.openTicketsValue ?? 0) > 0 && `${money(stats!.openTicketsValue)} unpaid tickets`}
+                          {(stats?.openTicketsValue ?? 0) > 0 && (stats?.creditValue ?? 0) > 0 && ' · '}
+                          {(stats?.creditValue ?? 0) > 0 && `${money(stats!.creditValue)} on credit`}
+                        </p>
+                      </div>
+                    )}
+
+                    {isConfirming && (
+                      <div className="mt-2 pt-2 border-t border-zinc-800/60 flex gap-2">
+                        <button
+                          onClick={() => setConfirmDeleteStaff(null)}
+                          className="flex-1 py-1.5 bg-zinc-800 text-zinc-400 rounded-lg font-mono text-[10px] font-bold uppercase"
+                        >
+                          Cancel
+                        </button>
+                        <button
+                          onClick={() => handleDeleteStaff(s.user_id)}
+                          className="flex-1 py-1.5 bg-red-500/20 text-red-400 border border-red-500/30 rounded-lg font-mono text-[10px] font-bold uppercase"
+                        >
+                          Confirm Delete
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                );
               })
             )}
           </div>
@@ -1072,31 +1069,59 @@ export const AdminDashboard: React.FC = () => {
                 ) : (
                   <>
                     <div className="space-y-2.5 mt-2">
-                      {pagedTickets.map((o) => (
-                        <div
-                          key={o.order_id}
-                          className="bg-zinc-900/60 border border-zinc-800/60 rounded-xl p-3 space-y-2"
-                        >
-                          <div className="flex items-center justify-between">
-                            <div>
-                              <p className="text-xs font-semibold text-white">
-                                Ticket #{o.order_id.slice(0, 6)}
-                              </p>
-                              <p className="text-[10px] font-mono text-zinc-500">
-                                {staffMap.get(o.placed_by_waiter_id)?.name ?? 'Unknown waiter'} ·{' '}
-                                {new Date(o.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                              </p>
-                            </div>
-                            <span className="text-orange-400 font-mono font-bold text-sm">{money(o.total_amount)}</span>
-                          </div>
-                          <button
-                            onClick={() => setCancellingOrderId(o.order_id)}
-                            className="w-full py-1.5 bg-red-500/10 border border-red-500/20 text-red-400 rounded-lg font-mono text-[9px] font-bold uppercase tracking-wider active:scale-95 transition"
+                      {pagedTickets.map((o) => {
+                        const isExpanded = expandedOrderId === o.order_id;
+                        return (
+                          <div
+                            key={o.order_id}
+                            className="bg-zinc-900/60 border border-zinc-800/60 rounded-xl p-3 space-y-2"
                           >
-                            Cancel Order
-                          </button>
-                        </div>
-                      ))}
+                            <div className="flex items-center justify-between">
+                              <div>
+                                <p className="text-xs font-semibold text-white">
+                                  Ticket #{o.order_id.slice(0, 6)}
+                                </p>
+                                <p className="text-[10px] font-mono text-zinc-500">
+                                  {staffMap.get(o.placed_by_waiter_id)?.name ?? 'Unknown waiter'} ·{' '}
+                                  {new Date(o.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                                </p>
+                              </div>
+                              <span className="text-orange-400 font-mono font-bold text-sm">{money(o.total_amount)}</span>
+                            </div>
+
+                            <button
+                              onClick={() => setExpandedOrderId(isExpanded ? null : o.order_id)}
+                              className="w-full flex items-center justify-between py-1.5 px-2 bg-zinc-950/60 border border-zinc-800/60 rounded-lg text-[9px] font-mono font-bold uppercase tracking-wider text-zinc-400 active:scale-95 transition"
+                            >
+                              <span>{o.items.length} item{o.items.length === 1 ? '' : 's'}</span>
+                              <ChevronDown className={`w-3 h-3 transition-transform ${isExpanded ? 'rotate-180' : ''}`} />
+                            </button>
+
+                            {isExpanded && (
+                              <div className="space-y-1 pl-1 border-l-2 border-orange-500/30">
+                                {o.items.map((item, i) => (
+                                  <div key={i} className="flex items-center justify-between pl-2 text-[10px] font-mono">
+                                    <span className="text-zinc-300">
+                                      {item.quantity}× {item.dish_name}
+                                      {item.selected_modifiers && item.selected_modifiers.length > 0 && (
+                                        <span className="text-zinc-500"> ({item.selected_modifiers.join(', ')})</span>
+                                      )}
+                                    </span>
+                                    <span className="text-zinc-500">{money(item.unit_price * item.quantity)}</span>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+
+                            <button
+                              onClick={() => setCancellingOrderId(o.order_id)}
+                              className="w-full py-1.5 bg-red-500/10 border border-red-500/20 text-red-400 rounded-lg font-mono text-[9px] font-bold uppercase tracking-wider active:scale-95 transition"
+                            >
+                              Cancel Order
+                            </button>
+                          </div>
+                        );
+                      })}
                     </div>
                     <Pagination page={ticketPage} totalPages={ticketTotalPages} onPageChange={setTicketPage} />
                   </>
@@ -1132,45 +1157,73 @@ export const AdminDashboard: React.FC = () => {
                 ) : (
                   <>
                     <div className="space-y-2.5 mt-2">
-                      {pagedCredit.map((o) => (
-                    <div
-                      key={o.order_id}
-                      className="bg-zinc-900/60 border border-zinc-800/60 rounded-xl p-3 space-y-2"
-                    >
-                      <div className="flex items-center justify-between">
-                        <div>
-                          <p className="text-xs font-semibold text-white">
-                            Ticket #{o.order_id.slice(0, 6)}
-                          </p>
-                          <p className="text-[10px] font-mono text-zinc-500">
-                            {staffMap.get(o.placed_by_waiter_id)?.name ?? 'Unknown waiter'} ·{' '}
-                            {new Date(o.timestamp).toLocaleDateString([], { day: '2-digit', month: 'short' })}
-                          </p>
-                        </div>
-                        <span className="text-orange-400 font-mono font-bold text-sm">{money(o.total_amount)}</span>
-                      </div>
-                      <div className="grid grid-cols-3 gap-1.5">
-                        <button
-                          onClick={() => handleCollectCredit(o.order_id, 'cash')}
-                          className="py-1.5 bg-zinc-800 text-zinc-300 rounded-lg font-mono text-[9px] font-bold uppercase tracking-wider active:scale-95 transition"
-                        >
-                          Paid Cash
-                        </button>
-                        <button
-                          onClick={() => handleCollectCredit(o.order_id, 'mpesa')}
-                          className="py-1.5 bg-zinc-800 text-zinc-300 rounded-lg font-mono text-[9px] font-bold uppercase tracking-wider active:scale-95 transition"
-                        >
-                          Paid M-Pesa
-                        </button>
-                        <button
-                          onClick={() => handleWriteOffCredit(o.order_id)}
-                          className="py-1.5 bg-red-500/10 border border-red-500/20 text-red-400 rounded-lg font-mono text-[9px] font-bold uppercase tracking-wider active:scale-95 transition"
-                        >
-                          Write Off
-                        </button>
-                      </div>
-                    </div>
-                  ))}
+                      {pagedCredit.map((o) => {
+                        const isExpanded = expandedOrderId === o.order_id;
+                        return (
+                          <div
+                            key={o.order_id}
+                            className="bg-zinc-900/60 border border-zinc-800/60 rounded-xl p-3 space-y-2"
+                          >
+                            <div className="flex items-center justify-between">
+                              <div>
+                                <p className="text-xs font-semibold text-white">
+                                  Ticket #{o.order_id.slice(0, 6)}
+                                </p>
+                                <p className="text-[10px] font-mono text-zinc-500">
+                                  {staffMap.get(o.placed_by_waiter_id)?.name ?? 'Unknown waiter'} ·{' '}
+                                  {new Date(o.timestamp).toLocaleDateString([], { day: '2-digit', month: 'short' })}
+                                </p>
+                              </div>
+                              <span className="text-orange-400 font-mono font-bold text-sm">{money(o.total_amount)}</span>
+                            </div>
+
+                            <button
+                              onClick={() => setExpandedOrderId(isExpanded ? null : o.order_id)}
+                              className="w-full flex items-center justify-between py-1.5 px-2 bg-zinc-950/60 border border-zinc-800/60 rounded-lg text-[9px] font-mono font-bold uppercase tracking-wider text-zinc-400 active:scale-95 transition"
+                            >
+                              <span>{o.items.length} item{o.items.length === 1 ? '' : 's'}</span>
+                              <ChevronDown className={`w-3 h-3 transition-transform ${isExpanded ? 'rotate-180' : ''}`} />
+                            </button>
+
+                            {isExpanded && (
+                              <div className="space-y-1 pl-1 border-l-2 border-orange-500/30">
+                                {o.items.map((item, i) => (
+                                  <div key={i} className="flex items-center justify-between pl-2 text-[10px] font-mono">
+                                    <span className="text-zinc-300">
+                                      {item.quantity}× {item.dish_name}
+                                      {item.selected_modifiers && item.selected_modifiers.length > 0 && (
+                                        <span className="text-zinc-500"> ({item.selected_modifiers.join(', ')})</span>
+                                      )}
+                                    </span>
+                                    <span className="text-zinc-500">{money(item.unit_price * item.quantity)}</span>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+
+                            <div className="grid grid-cols-3 gap-1.5">
+                              <button
+                                onClick={() => handleCollectCredit(o.order_id, 'cash')}
+                                className="py-1.5 bg-zinc-800 text-zinc-300 rounded-lg font-mono text-[9px] font-bold uppercase tracking-wider active:scale-95 transition"
+                              >
+                                Paid Cash
+                              </button>
+                              <button
+                                onClick={() => handleCollectCredit(o.order_id, 'mpesa')}
+                                className="py-1.5 bg-zinc-800 text-zinc-300 rounded-lg font-mono text-[9px] font-bold uppercase tracking-wider active:scale-95 transition"
+                              >
+                                Paid M-Pesa
+                              </button>
+                              <button
+                                onClick={() => handleWriteOffCredit(o.order_id)}
+                                className="py-1.5 bg-red-500/10 border border-red-500/20 text-red-400 rounded-lg font-mono text-[9px] font-bold uppercase tracking-wider active:scale-95 transition"
+                              >
+                                Write Off
+                              </button>
+                            </div>
+                          </div>
+                        );
+                      })}
                     </div>
                     <Pagination page={creditPage} totalPages={creditTotalPages} onPageChange={setCreditPage} />
                   </>
@@ -1215,11 +1268,10 @@ export const AdminDashboard: React.FC = () => {
                 <button
                   key={f}
                   onClick={() => changeFilter(f)}
-                  className={`flex-1 py-2 rounded-xl font-mono text-[10px] font-bold tracking-wider uppercase transition ${
-                    filter === f
+                  className={`flex-1 py-2 rounded-xl font-mono text-[10px] font-bold tracking-wider uppercase transition ${filter === f
                       ? 'bg-orange-500 text-zinc-950 shadow-md shadow-orange-500/20'
                       : 'text-zinc-400 hover:text-white'
-                  }`}
+                    }`}
                 >
                   {f}
                 </button>
@@ -1307,11 +1359,10 @@ export const AdminDashboard: React.FC = () => {
                         </div>
                       ) : (
                         <div
-                          className={`flex items-center justify-center gap-1.5 py-2 rounded-xl font-mono text-[10px] font-bold uppercase tracking-wider ${
-                            l.payroll_deduction_status === 'deducted'
+                          className={`flex items-center justify-center gap-1.5 py-2 rounded-xl font-mono text-[10px] font-bold uppercase tracking-wider ${l.payroll_deduction_status === 'deducted'
                               ? 'bg-orange-500/10 border border-orange-500/30 text-orange-400'
                               : 'bg-emerald-500/10 border border-emerald-500/30 text-emerald-400'
-                          }`}
+                            }`}
                         >
                           {l.payroll_deduction_status === 'deducted' ? (
                             <XCircle className="w-3.5 h-3.5" />
@@ -1343,9 +1394,8 @@ export const AdminDashboard: React.FC = () => {
               <button
                 key={t.id}
                 onClick={() => setActiveTab(t.id)}
-                className={`relative flex flex-col items-center gap-1 py-2.5 transition ${
-                  isActive ? 'text-orange-400' : 'text-zinc-500'
-                }`}
+                className={`relative flex flex-col items-center gap-1 py-2.5 transition ${isActive ? 'text-orange-400' : 'text-zinc-500'
+                  }`}
               >
                 <Icon className="w-4.5 h-4.5" />
                 <span className="text-[9px] font-mono font-bold uppercase tracking-wider">{t.label}</span>
@@ -1405,11 +1455,10 @@ export const AdminDashboard: React.FC = () => {
                     <button
                       key={role}
                       onClick={() => setNewRole(role)}
-                      className={`py-2 text-[10px] font-mono font-bold uppercase tracking-wider rounded-xl border transition ${
-                        newRole === role
+                      className={`py-2 text-[10px] font-mono font-bold uppercase tracking-wider rounded-xl border transition ${newRole === role
                           ? 'bg-orange-500 text-zinc-950 border-orange-400'
                           : 'bg-zinc-800 text-zinc-400 border-zinc-700'
-                      }`}
+                        }`}
                     >
                       {role}
                     </button>
@@ -1502,11 +1551,10 @@ export const AdminDashboard: React.FC = () => {
                     <button
                       key={role}
                       onClick={() => setEditRole(role)}
-                      className={`py-2 text-[10px] font-mono font-bold uppercase tracking-wider rounded-xl border transition ${
-                        editRole === role
+                      className={`py-2 text-[10px] font-mono font-bold uppercase tracking-wider rounded-xl border transition ${editRole === role
                           ? 'bg-orange-500 text-zinc-950 border-orange-400'
                           : 'bg-zinc-800 text-zinc-400 border-zinc-700'
-                      }`}
+                        }`}
                     >
                       {role}
                     </button>
