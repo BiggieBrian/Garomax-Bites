@@ -1,7 +1,7 @@
 import React, { useMemo, useState } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import jsPDF from 'jspdf';
-import { autoTable } from 'jspdf-autotable';
+import autoTable from 'jspdf-autotable';
 import { db } from '../db/kibandaDB';
 import type { RecipeItem } from '../types';
 import {
@@ -38,6 +38,7 @@ interface WaiterDaySummary {
   cancelledCount: number;
   cancelledValue: number;
   unpaidLossValue: number;
+  selfConfirmedCount: number;
   flags: string[];
 }
 
@@ -121,6 +122,7 @@ export const DailyReconciliationReport: React.FC<{ branchId: string | null }> = 
           cancelledCount: 0,
           cancelledValue: 0,
           unpaidLossValue: 0,
+          selfConfirmedCount: 0,
           flags: [],
         };
         map.set(id, s);
@@ -144,6 +146,9 @@ export const DailyReconciliationReport: React.FC<{ branchId: string | null }> = 
       } else if (o.payment_status === 'unpaid_loss') {
         s.unpaidLossValue += o.total_amount;
       }
+      if (o.self_confirmed) {
+        s.selfConfirmedCount += 1;
+      }
     });
 
     map.forEach((s) => {
@@ -156,6 +161,11 @@ export const DailyReconciliationReport: React.FC<{ branchId: string | null }> = 
       }
       if (s.unpaidLossValue > 0) {
         s.flags.push(`${money(s.unpaidLossValue)} marked unpaid loss`);
+      }
+      if (s.selfConfirmedCount > 0) {
+        s.flags.push(
+          `${s.selfConfirmedCount} order${s.selfConfirmedCount === 1 ? '' : 's'} self-confirmed (no second person checked)`
+        );
       }
     });
 

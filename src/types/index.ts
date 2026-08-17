@@ -107,6 +107,11 @@ export interface Order {
   // a cancelled order still has an audit trail: who cancelled it, and why.
   cancelled_by_admin_id?: string;
   cancel_reason?: string;
+  // True when the same hybrid-role account both placed and confirmed this
+  // order — see the self-confirmation warning in KitchenDisplay.tsx. Only
+  // ever set on hybrid accounts; a plain cook confirming someone else's
+  // order is the normal flow and never sets this.
+  self_confirmed?: boolean;
   synced?: boolean;
 }
 

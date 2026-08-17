@@ -23,7 +23,13 @@ export const WaiterPOS: React.FC = () => {
   const allActiveOrders = useLiveQuery(() => 
     db.orders.where('payment_status').equals('active').reverse().toArray(), []
   );
-  const activeOrders = allActiveOrders?.filter((o) => o.branch_id === myBranchId);
+  // Scoped to both this branch AND the person currently logged in. This
+  // matters most for hybrid accounts: they share this exact screen with
+  // plain waiters, but should only be chasing their own unpaid tickets —
+  // not the entire branch's — same as any other waiter would see.
+  const activeOrders = allActiveOrders
+    ?.filter((o) => o.branch_id === myBranchId)
+    .filter((o) => o.placed_by_waiter_id === currentUser?.user_id);
 
   // Get unique list of dishes from recipe mappings
   const dishes = Array.from(
