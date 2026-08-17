@@ -17,7 +17,7 @@ create table if not exists branches (
 create table if not exists users (
   user_id text primary key,
   name text not null,
-  role text not null check (role in ('superadmin', 'admin', 'cook', 'waiter')),
+  role text not null check (role in ('superadmin', 'admin', 'cook', 'waiter', 'hybrid')),
   pin_code text not null,
   active_shift boolean not null default true,
   basic_salary numeric not null default 0,
@@ -76,7 +76,7 @@ create table if not exists recipes (
 create table if not exists orders (
   order_id text primary key,
   branch_id text not null references branches(branch_id),
-  payment_status text not null check (payment_status in ('active', 'paid', 'credit', 'unpaid_loss')),
+  payment_status text not null check (payment_status in ('active', 'paid', 'credit', 'unpaid_loss', 'cancelled')),
   payment_method text check (payment_method in ('cash', 'mpesa', 'credit')),
   mpesa_code text,
   kitchen_status text not null default 'queued' check (kitchen_status in ('queued', 'ready')),
@@ -84,6 +84,8 @@ create table if not exists orders (
   total_amount numeric not null,
   placed_by_waiter_id text not null references users(user_id),
   confirmed_by_cook_id text references users(user_id),
+  cancelled_by_admin_id text references users(user_id), -- cancellation is admin-only; see AdminDashboard.tsx
+  cancel_reason text,
   ts timestamptz not null
 );
 

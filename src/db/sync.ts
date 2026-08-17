@@ -68,6 +68,8 @@ const orderToRow = (o: Order) => ({
   total_amount: o.total_amount,
   placed_by_waiter_id: o.placed_by_waiter_id,
   confirmed_by_cook_id: o.confirmed_by_cook_id ?? null,
+  cancelled_by_admin_id: o.cancelled_by_admin_id ?? null,
+  cancel_reason: o.cancel_reason ?? null,
   ts: o.timestamp,
 });
 
@@ -83,6 +85,8 @@ const orderFromRow = (r: any): Order => ({
   total_amount: r.total_amount,
   placed_by_waiter_id: r.placed_by_waiter_id,
   confirmed_by_cook_id: r.confirmed_by_cook_id ?? undefined,
+  cancelled_by_admin_id: r.cancelled_by_admin_id ?? undefined,
+  cancel_reason: r.cancel_reason ?? undefined,
   timestamp: r.ts,
   synced: true,
 });

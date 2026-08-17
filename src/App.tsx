@@ -3,6 +3,7 @@ import { AuthProvider, useAuth } from './context/AuthContext';
 import { Login } from './pages/Login';
 import { WaiterPOS } from './pages/WaiterPOS';
 import { KitchenDisplay } from './pages/KitchenDisplay';
+import { HybridStaffView } from './pages/HybridStaffView';
 import { AdminDashboard } from './pages/AdminDashboard';
 import { SuperAdminDashboard } from './pages/SuperAdminDashboard';
 import { LogOut, Cloud, CloudOff, RefreshCw, AlertTriangle, Pencil, X } from 'lucide-react';
@@ -107,6 +108,8 @@ const DashboardSwitch: React.FC = () => {
         {currentUser.role === 'waiter' && <WaiterPOS />}
 
         {currentUser.role === 'cook' && <KitchenDisplay/>}
+
+        {currentUser.role === 'hybrid' && <HybridStaffView />}
 
         {currentUser.role === 'admin' && <AdminDashboard />}
 

@@ -29,8 +29,10 @@ export const KitchenDisplay: React.FC = () => {
 
   // Live query the kitchen queue by prep status — independent of whether the
   // waiter has collected payment yet. A ticket can be "ready" and still unpaid.
+  // Excludes cancelled orders: an admin cancellation should pull the ticket
+  // out of the kitchen immediately, not just hide it from the waiter.
   const allQueuedOrders = useLiveQuery(
-    () => db.orders.where('kitchen_status').equals('queued').reverse().toArray(),
+    () => db.orders.where('kitchen_status').equals('queued').and((o) => o.payment_status !== 'cancelled').reverse().toArray(),
     []
   );
   const orders = allQueuedOrders?.filter((o) => o.branch_id === myBranchId);

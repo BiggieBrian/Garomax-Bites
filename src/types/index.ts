@@ -1,4 +1,4 @@
-export type UserRole = 'superadmin' | 'admin' | 'cook' | 'waiter';
+export type UserRole = 'superadmin' | 'admin' | 'cook' | 'waiter' | 'hybrid';
 
 export interface Branch {
   branch_id: string;
@@ -79,7 +79,7 @@ export interface FixedAsset {
   synced?: boolean;
 }
 
-export type PaymentStatus = 'active' | 'paid' | 'credit' | 'unpaid_loss';
+export type PaymentStatus = 'active' | 'paid' | 'credit' | 'unpaid_loss' | 'cancelled';
 export type PaymentMethod = 'cash' | 'mpesa' | 'credit';
 export type KitchenStatus = 'queued' | 'ready';
 
@@ -102,6 +102,11 @@ export interface Order {
   placed_by_waiter_id: string;
   confirmed_by_cook_id?: string;
   timestamp: string;
+  // Cancellation is admin-only (see AdminDashboard.tsx) — a waiter can never
+  // set payment_status to 'cancelled' themselves. These two fields exist so
+  // a cancelled order still has an audit trail: who cancelled it, and why.
+  cancelled_by_admin_id?: string;
+  cancel_reason?: string;
   synced?: boolean;
 }
 

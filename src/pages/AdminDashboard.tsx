@@ -11,6 +11,7 @@ import { SuppliesManager } from '../components/SuppliesManager';
 import { Pagination } from '../components/Pagination';
 import { usePagination } from '../components/usePagination';
 import { SearchInput } from '../components/SearchInput';
+import { DailyReconciliationReport } from '../components/DailyReconciliationReport';
 import type { StaffLedger, User, UserRole, RecipeItem } from '../types';
 import {
   ClipboardList,
@@ -30,12 +31,13 @@ import {
   Pencil,
   LayoutGrid,
   Boxes,
-  ShoppingBasket
+  ShoppingBasket,
+  Clock3
 } from 'lucide-react';
 
 const money = (n: number) => `KES ${n.toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
 
-type AdminTab = 'overview' | 'stock' | 'assets' | 'supplies' | 'staff' | 'money';
+type AdminTab = 'overview' | 'stock' | 'assets' | 'supplies' | 'staff' | 'money' | 'reconciliation';
 
 export const AdminDashboard: React.FC = () => {
   const { currentUser } = useAuth();
@@ -273,6 +275,49 @@ export const AdminDashboard: React.FC = () => {
   }, [ledgers]);
 
   // ---------------------------------------------------------------------
+  // Per-staff stats — sales generated, orders confirmed in the kitchen, and
+  // a combined "at risk" total. "At risk" deliberately goes beyond ledger
+  // deductions: an open ticket a waiter hasn't collected yet, or a credit
+  // sale still outstanding, is money that staff member is on the hook for
+  // until it's actually settled — the admin wants that visible right
+  // alongside confirmed deductions, not just the confirmed ones.
+  // Sales only counts 'paid' orders (mirrors the Overview's own definition
+  // of revenue) so it isn't double-counting money already shown as at-risk.
+  // ---------------------------------------------------------------------
+  const staffStats = useMemo(() => {
+    type Stats = { sales: number; ordersPlaced: number; ordersConfirmed: number; openTicketsValue: number; creditValue: number };
+    const map = new Map<string, Stats>();
+    const get = (id: string): Stats => {
+      let s = map.get(id);
+      if (!s) {
+        s = { sales: 0, ordersPlaced: 0, ordersConfirmed: 0, openTicketsValue: 0, creditValue: 0 };
+        map.set(id, s);
+      }
+      return s;
+    };
+    (orders ?? []).forEach((o) => {
+      const placed = get(o.placed_by_waiter_id);
+      if (o.payment_status === 'paid') {
+        placed.sales += o.total_amount;
+        placed.ordersPlaced += 1;
+      } else if (o.payment_status === 'active') {
+        placed.openTicketsValue += o.total_amount;
+      } else if (o.payment_status === 'credit') {
+        placed.creditValue += o.total_amount;
+      }
+      if (o.confirmed_by_cook_id) {
+        get(o.confirmed_by_cook_id).ordersConfirmed += 1;
+      }
+    });
+    return map;
+  }, [orders]);
+
+  const staffAtRisk = (userId: string) => {
+    const s = staffStats.get(userId);
+    return (staffDeductions.get(userId) ?? 0) + (s?.openTicketsValue ?? 0) + (s?.creditValue ?? 0);
+  };
+
+  // ---------------------------------------------------------------------
   // Staff management — create accounts, set PINs, toggle shift status
   // ---------------------------------------------------------------------
   const [showStaffForm, setShowStaffForm] = useState(false);
@@ -370,12 +415,14 @@ export const AdminDashboard: React.FC = () => {
   const [editingStaff, setEditingStaff] = useState<User | null>(null);
   const [editSalary, setEditSalary] = useState('');
   const [editPin, setEditPin] = useState('');
+  const [editRole, setEditRole] = useState<UserRole>('waiter');
   const [editError, setEditError] = useState('');
 
   const openEditStaff = (s: User) => {
     setEditingStaff(s);
     setEditSalary(String(s.basic_salary));
     setEditPin(s.pin_code);
+    setEditRole(s.role);
     setEditError('');
   };
 
@@ -393,10 +440,20 @@ export const AdminDashboard: React.FC = () => {
       setEditError('That PIN is already in use — pick a different one.');
       return;
     }
+    // Same protection as deleting the last admin (see isLastAdmin below) —
+    // changing them to a non-admin role would lock the branch out of
+    // management just as effectively as deleting them would.
+    const adminCount = (staff ?? []).filter((x) => x.role === 'admin').length;
+    const isOnlyAdmin = editingStaff.role === 'admin' && adminCount <= 1;
+    if (isOnlyAdmin && editRole !== 'admin') {
+      setEditError('This is the last admin at this branch — add another admin before changing this role.');
+      return;
+    }
 
     await db.users.update(editingStaff.user_id, {
       pin_code: editPin,
       basic_salary: parseFloat(editSalary) || 0,
+      role: editRole,
       synced: false,
     });
     requestSync();
@@ -404,11 +461,21 @@ export const AdminDashboard: React.FC = () => {
   };
 
   const [staffSearch, setStaffSearch] = useState('');
+  const [staffSort, setStaffSort] = useState<'name' | 'sales' | 'atRisk'>('name');
   const searchedStaff = useMemo(() => {
     const q = staffSearch.trim().toLowerCase();
     const list = staff ?? [];
-    return q ? list.filter((s) => s.name.toLowerCase().includes(q)) : list;
-  }, [staff, staffSearch]);
+    const filtered = q ? list.filter((s) => s.name.toLowerCase().includes(q)) : list;
+    const sorted = [...filtered];
+    if (staffSort === 'sales') {
+      sorted.sort((a, b) => (staffStats.get(b.user_id)?.sales ?? 0) - (staffStats.get(a.user_id)?.sales ?? 0));
+    } else if (staffSort === 'atRisk') {
+      sorted.sort((a, b) => staffAtRisk(b.user_id) - staffAtRisk(a.user_id));
+    } else {
+      sorted.sort((a, b) => a.name.localeCompare(b.name));
+    }
+    return sorted;
+  }, [staff, staffSearch, staffSort, staffStats, staffDeductions]);
 
   const { page: staffPage, setPage: setStaffPage, totalPages: staffTotalPages, pageItems: pagedStaff } =
     usePagination(searchedStaff, 5);
@@ -505,6 +572,51 @@ export const AdminDashboard: React.FC = () => {
   };
 
   // ---------------------------------------------------------------------
+  // Open Tickets — orders placed but not yet settled at all (not even to
+  // credit). This is the admin's only view of "who has an unpaid table
+  // right now, and which waiter opened it" — previously only a lump total
+  // (sales.unsettledValue) existed with no per-order or per-waiter detail.
+  // Cancelling is admin-only by construction: this whole file only renders
+  // for the Admin role, a waiter has no code path that can reach this.
+  // ---------------------------------------------------------------------
+  const openTickets = (orders ?? [])
+    .filter((o) => o.payment_status === 'active')
+    .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+
+  const [ticketSearch, setTicketSearch] = useState('');
+  const searchedTickets = useMemo(() => {
+    const q = ticketSearch.trim().toLowerCase();
+    if (!q) return openTickets;
+    return openTickets.filter((o) => {
+      const waiterName = staffMap.get(o.placed_by_waiter_id)?.name?.toLowerCase() ?? '';
+      return waiterName.includes(q) || o.order_id.toLowerCase().includes(q);
+    });
+  }, [openTickets, ticketSearch, staffMap]);
+
+  const {
+    page: ticketPage,
+    setPage: setTicketPage,
+    totalPages: ticketTotalPages,
+    pageItems: pagedTickets,
+  } = usePagination(searchedTickets, 4);
+
+  const [cancellingOrderId, setCancellingOrderId] = useState<string | null>(null);
+  const [cancelReason, setCancelReason] = useState('');
+
+  const handleCancelOrder = async () => {
+    if (!cancellingOrderId || !currentUser) return;
+    await db.orders.update(cancellingOrderId, {
+      payment_status: 'cancelled',
+      cancelled_by_admin_id: currentUser.user_id,
+      cancel_reason: cancelReason.trim() || undefined,
+      synced: false,
+    });
+    requestSync();
+    setCancellingOrderId(null);
+    setCancelReason('');
+  };
+
+  // ---------------------------------------------------------------------
   // Credit / Tabs — bills a waiter settled as "credit" sit here until the
   // customer actually pays, or the owner writes the debt off as a loss.
   // ---------------------------------------------------------------------
@@ -553,6 +665,7 @@ export const AdminDashboard: React.FC = () => {
     { id: 'supplies', label: 'Supplies', icon: ShoppingBasket, badge: overdueSuppliesCount },
     { id: 'staff', label: 'Staff', icon: Users },
     { id: 'money', label: 'Money', icon: Wallet, badge: creditOrders.length },
+    { id: 'reconciliation', label: 'Audit', icon: ShieldAlert },
   ];
 
   return (
@@ -772,6 +885,26 @@ export const AdminDashboard: React.FC = () => {
             </button>
           </div>
 
+          <div className="flex bg-[#0f1117] p-1 rounded-2xl border border-zinc-800/80 shadow-lg">
+            {([
+              { id: 'name', label: 'Name' },
+              { id: 'sales', label: 'Top Sales' },
+              { id: 'atRisk', label: 'Most At Risk' },
+            ] as const).map((opt) => (
+              <button
+                key={opt.id}
+                onClick={() => { setStaffSort(opt.id); setStaffPage(1); }}
+                className={`flex-1 py-2 rounded-xl font-mono text-[10px] font-bold tracking-wider uppercase transition ${
+                  staffSort === opt.id
+                    ? 'bg-orange-500 text-zinc-950 shadow-md shadow-orange-500/20'
+                    : 'text-zinc-400 hover:text-white'
+                }`}
+              >
+                {opt.label}
+              </button>
+            ))}
+          </div>
+
           <SearchInput
             value={staffSearch}
             onChange={(v) => { setStaffSearch(v); setStaffPage(1); }}
@@ -792,6 +925,8 @@ export const AdminDashboard: React.FC = () => {
               const isConfirming = confirmDeleteStaff === s.user_id;
               const deductions = staffDeductions.get(s.user_id) ?? 0;
               const netPay = s.basic_salary - deductions;
+              const stats = staffStats.get(s.user_id);
+              const atRisk = staffAtRisk(s.user_id);
 
               return (
                 <div
@@ -815,7 +950,7 @@ export const AdminDashboard: React.FC = () => {
                       </span>
                       <button
                         onClick={() => openEditStaff(s)}
-                        title="Edit salary / PIN"
+                        title="Edit salary / role / PIN"
                         className="p-1 rounded-lg bg-zinc-800 hover:bg-orange-500/20 text-zinc-400 hover:text-orange-400"
                       >
                         <Pencil className="w-3 h-3" />
@@ -851,6 +986,37 @@ export const AdminDashboard: React.FC = () => {
                     </div>
                   </div>
 
+                  <div className="mt-2 pt-2 border-t border-zinc-800/60 grid grid-cols-2 gap-2">
+                    <div>
+                      <p className="text-[9px] font-mono text-zinc-500 uppercase tracking-widest">Sales</p>
+                      <p className="font-mono font-bold text-xs text-white">{money(stats?.sales ?? 0)}</p>
+                      <p className="text-[9px] font-mono text-zinc-600">{stats?.ordersPlaced ?? 0} orders</p>
+                    </div>
+                    <div>
+                      <p className="text-[9px] font-mono text-zinc-500 uppercase tracking-widest">Confirmed (Kitchen)</p>
+                      <p className="font-mono font-bold text-xs text-white">{stats?.ordersConfirmed ?? 0}</p>
+                      <p className="text-[9px] font-mono text-zinc-600">orders prepared</p>
+                    </div>
+                  </div>
+
+                  {atRisk > 0 && (
+                    <div className="mt-2 pt-2 border-t border-zinc-800/60">
+                      <div className="flex items-center justify-between">
+                        <span className="text-[10px] font-mono text-amber-500 uppercase tracking-widest">
+                          Total At Risk
+                        </span>
+                        <span className="font-mono font-bold text-xs text-amber-400">{money(atRisk)}</span>
+                      </div>
+                      <p className="text-[9px] font-mono text-zinc-600 mt-0.5">
+                        {deductions > 0 && `${money(deductions)} deductions`}
+                        {deductions > 0 && ((stats?.openTicketsValue ?? 0) > 0 || (stats?.creditValue ?? 0) > 0) && ' · '}
+                        {(stats?.openTicketsValue ?? 0) > 0 && `${money(stats!.openTicketsValue)} unpaid tickets`}
+                        {(stats?.openTicketsValue ?? 0) > 0 && (stats?.creditValue ?? 0) > 0 && ' · '}
+                        {(stats?.creditValue ?? 0) > 0 && `${money(stats!.creditValue)} on credit`}
+                      </p>
+                    </div>
+                  )}
+
                   {isConfirming && (
                     <div className="mt-2 pt-2 border-t border-zinc-800/60 flex gap-2">
                       <button
@@ -879,6 +1045,66 @@ export const AdminDashboard: React.FC = () => {
       {/* ===================== MONEY TAB ===================== */}
       {activeTab === 'money' && (
         <div className="space-y-5">
+          <div className="relative bg-[#0f1117] border border-zinc-800/80 rounded-2xl p-4 shadow-xl space-y-3">
+            <div className="flex items-center justify-between border-b border-zinc-800/80 pb-2">
+              <div className="flex items-center gap-2">
+                <Clock3 className="w-4 h-4 text-orange-400" />
+                <span className="font-mono text-xs font-bold text-zinc-300 uppercase tracking-wider">
+                  Open Tickets
+                </span>
+              </div>
+              <span className="text-[10px] font-mono text-zinc-500">
+                {openTickets.length} open · {money(sales.unsettledValue)}
+              </span>
+            </div>
+
+            {openTickets.length === 0 ? (
+              <p className="text-zinc-600 text-[11px] font-mono text-center py-6">No unsettled tickets right now</p>
+            ) : (
+              <div>
+                <SearchInput
+                  value={ticketSearch}
+                  onChange={(v) => { setTicketSearch(v); setTicketPage(1); }}
+                  placeholder="Search by waiter or ticket..."
+                />
+                {searchedTickets.length === 0 ? (
+                  <p className="text-zinc-600 text-[11px] font-mono text-center py-4">No tickets match your search</p>
+                ) : (
+                  <>
+                    <div className="space-y-2.5 mt-2">
+                      {pagedTickets.map((o) => (
+                        <div
+                          key={o.order_id}
+                          className="bg-zinc-900/60 border border-zinc-800/60 rounded-xl p-3 space-y-2"
+                        >
+                          <div className="flex items-center justify-between">
+                            <div>
+                              <p className="text-xs font-semibold text-white">
+                                Ticket #{o.order_id.slice(0, 6)}
+                              </p>
+                              <p className="text-[10px] font-mono text-zinc-500">
+                                {staffMap.get(o.placed_by_waiter_id)?.name ?? 'Unknown waiter'} ·{' '}
+                                {new Date(o.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                              </p>
+                            </div>
+                            <span className="text-orange-400 font-mono font-bold text-sm">{money(o.total_amount)}</span>
+                          </div>
+                          <button
+                            onClick={() => setCancellingOrderId(o.order_id)}
+                            className="w-full py-1.5 bg-red-500/10 border border-red-500/20 text-red-400 rounded-lg font-mono text-[9px] font-bold uppercase tracking-wider active:scale-95 transition"
+                          >
+                            Cancel Order
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                    <Pagination page={ticketPage} totalPages={ticketTotalPages} onPageChange={setTicketPage} />
+                  </>
+                )}
+              </div>
+            )}
+          </div>
+
           <div className="relative bg-[#0f1117] border border-zinc-800/80 rounded-2xl p-4 shadow-xl space-y-3">
             <div className="flex items-center justify-between border-b border-zinc-800/80 pb-2">
               <div className="flex items-center gap-2">
@@ -1105,9 +1331,11 @@ export const AdminDashboard: React.FC = () => {
         </div>
       )}
 
+      {activeTab === 'reconciliation' && <DailyReconciliationReport branchId={myBranchId} />}
+
       {/* ===================== BOTTOM TAB BAR ===================== */}
       <nav className="fixed bottom-0 left-0 right-0 z-50 bg-[#0f1117]/95 backdrop-blur-md border-t border-zinc-800/80">
-        <div className="max-w-md mx-auto grid grid-cols-6">
+        <div className="max-w-md mx-auto grid grid-cols-7">
           {TABS.map((t) => {
             const Icon = t.icon;
             const isActive = activeTab === t.id;
@@ -1172,8 +1400,8 @@ export const AdminDashboard: React.FC = () => {
                 <label className="text-[10px] font-mono text-zinc-500 uppercase tracking-widest mb-1 block">
                   Role
                 </label>
-                <div className="grid grid-cols-3 gap-2">
-                  {(['waiter', 'cook', 'admin'] as const).map((role) => (
+                <div className="grid grid-cols-2 gap-2">
+                  {(['waiter', 'cook', 'hybrid', 'admin'] as const).map((role) => (
                     <button
                       key={role}
                       onClick={() => setNewRole(role)}
@@ -1267,6 +1495,31 @@ export const AdminDashboard: React.FC = () => {
 
               <div>
                 <label className="text-[10px] font-mono text-zinc-500 uppercase tracking-widest mb-1 block">
+                  Role
+                </label>
+                <div className="grid grid-cols-2 gap-2">
+                  {(['waiter', 'cook', 'hybrid', 'admin'] as const).map((role) => (
+                    <button
+                      key={role}
+                      onClick={() => setEditRole(role)}
+                      className={`py-2 text-[10px] font-mono font-bold uppercase tracking-wider rounded-xl border transition ${
+                        editRole === role
+                          ? 'bg-orange-500 text-zinc-950 border-orange-400'
+                          : 'bg-zinc-800 text-zinc-400 border-zinc-700'
+                      }`}
+                    >
+                      {role}
+                    </button>
+                  ))}
+                </div>
+                <p className="text-[9px] font-mono text-zinc-600 mt-1">
+                  Safe to change any time — orders they've already placed or confirmed stay tied to them
+                  either way, nothing about their history moves or is lost.
+                </p>
+              </div>
+
+              <div>
+                <label className="text-[10px] font-mono text-zinc-500 uppercase tracking-widest mb-1 block">
                   4-Digit PIN
                 </label>
                 <input
@@ -1294,6 +1547,52 @@ export const AdminDashboard: React.FC = () => {
               className="w-full py-3.5 bg-orange-500 hover:bg-orange-400 active:scale-[0.98] text-zinc-950 font-mono font-bold uppercase tracking-wider text-xs rounded-2xl transition shadow-lg shadow-orange-500/20"
             >
               Save Changes
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Cancel Order Modal */}
+      {cancellingOrderId && (
+        <div className="fixed inset-0 z-50 flex items-start sm:items-center justify-center overflow-y-auto bg-black/70 backdrop-blur-sm p-4 pt-10 sm:pt-4 pb-10">
+          <div className="relative w-full max-w-sm bg-[#0f1117] border border-zinc-800 rounded-3xl p-5 shadow-2xl space-y-4 max-h-[85vh] overflow-y-auto">
+            <div className="flex items-center justify-between">
+              <h3 className="font-mono text-xs font-bold text-white uppercase tracking-wider">Cancel Order</h3>
+              <button
+                onClick={() => {
+                  setCancellingOrderId(null);
+                  setCancelReason('');
+                }}
+                className="p-1.5 rounded-lg bg-zinc-900 hover:bg-zinc-800 text-zinc-400 border border-zinc-800"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
+
+            <p className="text-xs text-zinc-400">
+              This removes the ticket from the waiter's list and the kitchen queue. It cannot be undone.
+              A reason is recorded against your admin account for accountability.
+            </p>
+
+            <div>
+              <label className="text-[10px] font-mono text-zinc-500 uppercase tracking-widest mb-1 block">
+                Reason (optional but recommended)
+              </label>
+              <input
+                type="text"
+                autoFocus
+                value={cancelReason}
+                onChange={(e) => setCancelReason(e.target.value)}
+                placeholder="e.g. duplicate order, customer walked out"
+                className="w-full bg-zinc-950 border border-zinc-700 rounded-xl px-3 py-2.5 text-xs text-white font-mono focus:outline-none focus:border-orange-500"
+              />
+            </div>
+
+            <button
+              onClick={handleCancelOrder}
+              className="w-full py-3.5 bg-red-500 hover:bg-red-400 active:scale-[0.98] text-zinc-950 font-mono font-bold uppercase tracking-wider text-xs rounded-2xl transition shadow-lg shadow-red-500/20"
+            >
+              Cancel This Order
             </button>
           </div>
         </div>
