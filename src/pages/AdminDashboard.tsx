@@ -37,7 +37,6 @@ import {
 } from 'lucide-react';
 
 const money = (n: number) => `KES ${n.toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
-const [expandedOrderId, setExpandedOrderId] = useState<string | null>(null);
 
 type AdminTab = 'overview' | 'stock' | 'assets' | 'supplies' | 'staff' | 'money' | 'reconciliation';
 
@@ -116,6 +115,8 @@ export const AdminDashboard: React.FC = () => {
   }, [branchSupplies]);
 
   const staffMap = new Map((staff ?? []).map((s) => [s.user_id, s]));
+
+  const [expandedOrderId, setExpandedOrderId] = useState<string | null>(null);
 
   const [activeTab, setActiveTab] = useState<AdminTab>('overview');
 
