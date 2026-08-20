@@ -80,7 +80,7 @@ export interface FixedAsset {
 }
 
 export type PaymentStatus = 'active' | 'paid' | 'credit' | 'unpaid_loss' | 'cancelled';
-export type PaymentMethod = 'cash' | 'mpesa' | 'credit';
+export type PaymentMethod = 'cash' | 'mpesa' | 'credit' | 'split';
 export type KitchenStatus = 'queued' | 'ready';
 
 export interface OrderItem {
@@ -90,11 +90,24 @@ export interface OrderItem {
   selected_modifiers?: string[];
 }
 
+// Amounts collected per method for a single order. Only used when
+// payment_method === 'split' — a bill paid entirely in one method still
+// just uses payment_method directly, no splits object needed. `credit`
+// here means "still outstanding," not "collected as credit" — once that
+// portion is later collected (AdminDashboard's Credit/Tabs), it moves out
+// of `credit` and into whichever method actually collected it.
+export interface PaymentSplit {
+  cash?: number;
+  mpesa?: number;
+  credit?: number;
+}
+
 export interface Order {
   order_id: string;
   branch_id: string;
   payment_status: PaymentStatus;
   payment_method?: PaymentMethod;
+  payment_splits?: PaymentSplit;
   mpesa_code?: string;
   kitchen_status: KitchenStatus;
   items: OrderItem[];

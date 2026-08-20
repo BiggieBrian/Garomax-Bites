@@ -10,6 +10,7 @@ import { Plus, Minus, Send, Clock, CheckCircle, ShoppingBag, Flame, ChefHat, Mai
 
 const CATEGORIES: DishCategory[] = ['meals', 'snacks', 'drinks'];
 const CATEGORY_LABELS: Record<DishCategory, string> = { meals: 'Meals', snacks: 'Snacks', drinks: 'Drinks' };
+const money = (n: number) => `KES ${n.toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
 
 export const WaiterPOS: React.FC = () => {
   const { currentUser } = useAuth();
@@ -56,8 +57,25 @@ export const WaiterPOS: React.FC = () => {
   const [activeDrawer, setActiveDrawer] = useState<{ orderId: string; mode: 'payment' | 'receipt' } | null>(null);
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('cash');
   const [mpesaCode, setMpesaCode] = useState('');
+  // Split payment — e.g. 50 cash / 100 mpesa / 30 credit on one bill.
+  // Amounts are kept as raw text while typing so the field can be empty/
+  // partial without fighting the user; parsed to numbers at confirm time.
+  const [isSplit, setIsSplit] = useState(false);
+  const [splitCash, setSplitCash] = useState('');
+  const [splitMpesa, setSplitMpesa] = useState('');
+  const [splitCredit, setSplitCredit] = useState('');
   const [receiptChannel, setReceiptChannel] = useState<'email' | 'phone'>('email');
   const [receiptContact, setReceiptContact] = useState('');
+
+  const resetSettlementState = () => {
+    setActiveDrawer(null);
+    setPaymentMethod('cash');
+    setMpesaCode('');
+    setIsSplit(false);
+    setSplitCash('');
+    setSplitMpesa('');
+    setSplitCredit('');
+  };
 
   // Add dish to cart
   const addToCart = (dishName: string, price: number) => {
@@ -117,18 +135,43 @@ export const WaiterPOS: React.FC = () => {
   // Settle Payment after the customer finishes eating. A credit sale isn't
   // collected yet, so it gets its own payment_status — the admin dashboard's
   // Credit / Tabs section is where it later gets marked collected or written off.
-  const handleConfirmSettlement = async (orderId: string) => {
-    await db.orders.update(orderId, {
-      payment_status: paymentMethod === 'credit' ? 'credit' : 'paid',
-      payment_method: paymentMethod,
-      mpesa_code: paymentMethod === 'mpesa' ? mpesaCode : undefined,
-      synced: false,
-    });
-    requestSync();
+  //
+  // Split mode lets one bill be paid across cash/mpesa/credit at once (e.g.
+  // 50 cash + 100 mpesa + 30 credit) — the amounts must add up to the order
+  // total exactly. Any credit portion still puts the order in Credit/Tabs,
+  // but the cash/mpesa portions are recorded as collected immediately.
+  const splitTotal =
+    (parseFloat(splitCash) || 0) + (parseFloat(splitMpesa) || 0) + (parseFloat(splitCredit) || 0);
 
-    setActiveDrawer(null);
-    setMpesaCode('');
-    setPaymentMethod('cash');
+  const handleConfirmSettlement = async (order: Order) => {
+    if (isSplit) {
+      const cash = parseFloat(splitCash) || 0;
+      const mpesa = parseFloat(splitMpesa) || 0;
+      const credit = parseFloat(splitCredit) || 0;
+      if (Math.abs(cash + mpesa + credit - order.total_amount) > 0.01) return; // guarded by disabled button too
+      if (mpesa > 0 && !mpesaCode.trim()) return;
+
+      await db.orders.update(order.order_id, {
+        payment_status: credit > 0 ? 'credit' : 'paid',
+        payment_method: 'split',
+        payment_splits: {
+          ...(cash > 0 && { cash }),
+          ...(mpesa > 0 && { mpesa }),
+          ...(credit > 0 && { credit }),
+        },
+        mpesa_code: mpesa > 0 ? mpesaCode : undefined,
+        synced: false,
+      });
+    } else {
+      await db.orders.update(order.order_id, {
+        payment_status: paymentMethod === 'credit' ? 'credit' : 'paid',
+        payment_method: paymentMethod,
+        mpesa_code: paymentMethod === 'mpesa' ? mpesaCode : undefined,
+        synced: false,
+      });
+    }
+    requestSync();
+    resetSettlementState();
   };
 
   // Build a plain-text receipt for a ticket
@@ -417,71 +460,171 @@ export const WaiterPOS: React.FC = () => {
                   {/* Settle Payment Drawer */}
                   {drawerMode === 'payment' && (
                     <div className="pt-3 border-t border-zinc-800/80 space-y-3 bg-zinc-900/80 p-3 rounded-xl">
-                      <p className="text-[11px] font-mono font-bold text-zinc-300 uppercase tracking-wider">
-                        SELECT PAYMENT METHOD:
-                      </p>
-                      <div className="grid grid-cols-3 gap-2">
+                      <div className="flex items-center justify-between">
+                        <p className="text-[11px] font-mono font-bold text-zinc-300 uppercase tracking-wider">
+                          {isSplit ? 'SPLIT PAYMENT:' : 'SELECT PAYMENT METHOD:'}
+                        </p>
                         <button
-                          onClick={() => setPaymentMethod('cash')}
-                          className={`py-2 text-xs font-mono font-bold uppercase tracking-wider rounded-xl border transition ${
-                            paymentMethod === 'cash'
-                              ? 'bg-orange-500 text-zinc-950 border-orange-400'
+                          onClick={() => setIsSplit((v) => !v)}
+                          className={`text-[9px] font-mono font-bold uppercase tracking-wider px-2 py-1 rounded-lg border transition ${
+                            isSplit
+                              ? 'bg-orange-500/10 text-orange-400 border-orange-500/30'
                               : 'bg-zinc-800 text-zinc-400 border-zinc-700'
                           }`}
                         >
-                          CASH
-                        </button>
-                        <button
-                          onClick={() => setPaymentMethod('mpesa')}
-                          className={`py-2 text-xs font-mono font-bold uppercase tracking-wider rounded-xl border transition ${
-                            paymentMethod === 'mpesa'
-                              ? 'bg-orange-500 text-zinc-950 border-orange-400'
-                              : 'bg-zinc-800 text-zinc-400 border-zinc-700'
-                          }`}
-                        >
-                          M-PESA
-                        </button>
-                        <button
-                          onClick={() => setPaymentMethod('credit')}
-                          className={`py-2 text-xs font-mono font-bold uppercase tracking-wider rounded-xl border transition ${
-                            paymentMethod === 'credit'
-                              ? 'bg-orange-500 text-zinc-950 border-orange-400'
-                              : 'bg-zinc-800 text-zinc-400 border-zinc-700'
-                          }`}
-                        >
-                          CREDIT
+                          {isSplit ? '✕ Split' : 'Split bill'}
                         </button>
                       </div>
 
-                      {paymentMethod === 'mpesa' && (
-                        <input
-                          type="text"
-                          placeholder="M-PESA TRANSACTION CODE"
-                          value={mpesaCode}
-                          onChange={(e) => setMpesaCode(e.target.value.toUpperCase())}
-                          className="w-full bg-zinc-950 border border-zinc-700 rounded-xl px-3 py-2 text-xs text-white uppercase font-mono tracking-wider focus:outline-none focus:border-orange-500"
-                        />
-                      )}
+                      {!isSplit ? (
+                        <>
+                          <div className="grid grid-cols-3 gap-2">
+                            <button
+                              onClick={() => setPaymentMethod('cash')}
+                              className={`py-2 text-xs font-mono font-bold uppercase tracking-wider rounded-xl border transition ${
+                                paymentMethod === 'cash'
+                                  ? 'bg-orange-500 text-zinc-950 border-orange-400'
+                                  : 'bg-zinc-800 text-zinc-400 border-zinc-700'
+                              }`}
+                            >
+                              CASH
+                            </button>
+                            <button
+                              onClick={() => setPaymentMethod('mpesa')}
+                              className={`py-2 text-xs font-mono font-bold uppercase tracking-wider rounded-xl border transition ${
+                                paymentMethod === 'mpesa'
+                                  ? 'bg-orange-500 text-zinc-950 border-orange-400'
+                                  : 'bg-zinc-800 text-zinc-400 border-zinc-700'
+                              }`}
+                            >
+                              M-PESA
+                            </button>
+                            <button
+                              onClick={() => setPaymentMethod('credit')}
+                              className={`py-2 text-xs font-mono font-bold uppercase tracking-wider rounded-xl border transition ${
+                                paymentMethod === 'credit'
+                                  ? 'bg-orange-500 text-zinc-950 border-orange-400'
+                                  : 'bg-zinc-800 text-zinc-400 border-zinc-700'
+                              }`}
+                            >
+                              CREDIT
+                            </button>
+                          </div>
 
-                      {paymentMethod === 'credit' && (
-                        <p className="text-[10px] font-mono text-zinc-500 leading-relaxed">
-                          This bill will move to the owner's Credit / Tabs list as outstanding —
-                          it isn't counted as collected revenue until it's settled there.
-                        </p>
+                          {paymentMethod === 'mpesa' && (
+                            <input
+                              type="text"
+                              placeholder="M-PESA TRANSACTION CODE"
+                              value={mpesaCode}
+                              onChange={(e) => setMpesaCode(e.target.value.toUpperCase())}
+                              className="w-full bg-zinc-950 border border-zinc-700 rounded-xl px-3 py-2 text-xs text-white uppercase font-mono tracking-wider focus:outline-none focus:border-orange-500"
+                            />
+                          )}
+
+                          {paymentMethod === 'credit' && (
+                            <p className="text-[10px] font-mono text-zinc-500 leading-relaxed">
+                              This bill will move to the owner's Credit / Tabs list as outstanding —
+                              it isn't counted as collected revenue until it's settled there.
+                            </p>
+                          )}
+                        </>
+                      ) : (
+                        <div className="space-y-2">
+                          <div className="grid grid-cols-3 gap-2">
+                            <div>
+                              <label className="text-[9px] font-mono text-zinc-500 uppercase tracking-widest mb-1 block">
+                                Cash
+                              </label>
+                              <input
+                                type="number"
+                                inputMode="decimal"
+                                placeholder="0"
+                                value={splitCash}
+                                onChange={(e) => setSplitCash(e.target.value)}
+                                className="w-full bg-zinc-950 border border-zinc-700 rounded-xl px-2 py-2 text-xs text-white font-mono text-center focus:outline-none focus:border-orange-500"
+                              />
+                            </div>
+                            <div>
+                              <label className="text-[9px] font-mono text-zinc-500 uppercase tracking-widest mb-1 block">
+                                M-Pesa
+                              </label>
+                              <input
+                                type="number"
+                                inputMode="decimal"
+                                placeholder="0"
+                                value={splitMpesa}
+                                onChange={(e) => setSplitMpesa(e.target.value)}
+                                className="w-full bg-zinc-950 border border-zinc-700 rounded-xl px-2 py-2 text-xs text-white font-mono text-center focus:outline-none focus:border-orange-500"
+                              />
+                            </div>
+                            <div>
+                              <label className="text-[9px] font-mono text-zinc-500 uppercase tracking-widest mb-1 block">
+                                Credit
+                              </label>
+                              <input
+                                type="number"
+                                inputMode="decimal"
+                                placeholder="0"
+                                value={splitCredit}
+                                onChange={(e) => setSplitCredit(e.target.value)}
+                                className="w-full bg-zinc-950 border border-zinc-700 rounded-xl px-2 py-2 text-xs text-white font-mono text-center focus:outline-none focus:border-orange-500"
+                              />
+                            </div>
+                          </div>
+
+                          {parseFloat(splitMpesa) > 0 && (
+                            <input
+                              type="text"
+                              placeholder="M-PESA TRANSACTION CODE"
+                              value={mpesaCode}
+                              onChange={(e) => setMpesaCode(e.target.value.toUpperCase())}
+                              className="w-full bg-zinc-950 border border-zinc-700 rounded-xl px-3 py-2 text-xs text-white uppercase font-mono tracking-wider focus:outline-none focus:border-orange-500"
+                            />
+                          )}
+
+                          {parseFloat(splitCredit) > 0 && (
+                            <p className="text-[10px] font-mono text-zinc-500 leading-relaxed">
+                              The {money(parseFloat(splitCredit) || 0)} credit portion moves to the owner's
+                              Credit / Tabs list — the rest is recorded as collected now.
+                            </p>
+                          )}
+
+                          <div
+                            className={`flex items-center justify-between text-[10px] font-mono px-2 py-1.5 rounded-lg border ${
+                              Math.abs(splitTotal - order.total_amount) < 0.01
+                                ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400'
+                                : 'bg-red-500/10 border-red-500/20 text-red-400'
+                            }`}
+                          >
+                            <span>Entered: {money(splitTotal)}</span>
+                            <span>Bill: {money(order.total_amount)}</span>
+                          </div>
+                        </div>
                       )}
 
                       <div className="flex gap-2 pt-1">
                         <button
-                          onClick={() => setActiveDrawer(null)}
+                          onClick={resetSettlementState}
                           className="flex-1 py-2 bg-zinc-800 text-zinc-400 rounded-xl font-mono text-[11px] font-bold uppercase tracking-wider"
                         >
                           CANCEL
                         </button>
                         <button
-                          onClick={() => handleConfirmSettlement(order.order_id)}
-                          className="flex-1 py-2 bg-orange-500 text-zinc-950 rounded-xl font-mono text-[11px] font-bold uppercase tracking-wider shadow-lg shadow-orange-500/20"
+                          onClick={() => handleConfirmSettlement(order)}
+                          disabled={
+                            isSplit &&
+                            (Math.abs(splitTotal - order.total_amount) > 0.01 ||
+                              (parseFloat(splitMpesa) > 0 && !mpesaCode.trim()))
+                          }
+                          className="flex-1 py-2 bg-orange-500 text-zinc-950 rounded-xl font-mono text-[11px] font-bold uppercase tracking-wider shadow-lg shadow-orange-500/20 disabled:opacity-40 disabled:pointer-events-none"
                         >
-                          {paymentMethod === 'credit' ? 'CONFIRM ON CREDIT' : 'CONFIRM PAID'}
+                          {isSplit
+                            ? parseFloat(splitCredit) > 0
+                              ? 'CONFIRM SPLIT'
+                              : 'CONFIRM PAID'
+                            : paymentMethod === 'credit'
+                              ? 'CONFIRM ON CREDIT'
+                              : 'CONFIRM PAID'}
                         </button>
                       </div>
                     </div>

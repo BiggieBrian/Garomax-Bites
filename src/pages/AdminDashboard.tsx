@@ -11,8 +11,18 @@ import { SuppliesManager } from '../components/SuppliesManager';
 import { Pagination } from '../components/Pagination';
 import { usePagination } from '../components/usePagination';
 import { SearchInput } from '../components/SearchInput';
+import { DateFilter } from '../components/DateFilter';
 import { DailyReconciliationReport } from '../components/DailyReconciliationReport';
-import type { StaffLedger, User, UserRole, RecipeItem } from '../types';
+import type { StaffLedger, User, UserRole, RecipeItem, Order } from '../types';
+import { getOrderBreakdown, collectOutstandingCredit } from '../lib/payments';
+import {
+  filterByDatePreset,
+  formatDuration,
+  formatRelativeDate,
+  ticketSeverity,
+  ageInDays,
+  type DatePreset,
+} from '../lib/dateFilter';
 import {
   ClipboardList,
   Users,
@@ -120,6 +130,14 @@ export const AdminDashboard: React.FC = () => {
 
   const [activeTab, setActiveTab] = useState<AdminTab>('overview');
 
+  // Forces a re-render every minute so "open for Xm" on tickets stays current
+  // even if nobody touches the screen. Cheap — just a number nobody reads.
+  const [, forceTick] = useState(0);
+  React.useEffect(() => {
+    const id = setInterval(() => forceTick((t) => t + 1), 60000);
+    return () => clearInterval(id);
+  }, []);
+
   // ---------------------------------------------------------------------
   // Sales overview — today's paid orders, items sold, payment split, risk
   // ---------------------------------------------------------------------
@@ -158,7 +176,9 @@ export const AdminDashboard: React.FC = () => {
 
     const paymentSplit: Record<string, number> = { cash: 0, mpesa: 0, credit: 0 };
     paidInPeriod.forEach((o) => {
-      if (o.payment_method) paymentSplit[o.payment_method] = (paymentSplit[o.payment_method] ?? 0) + o.total_amount;
+      const b = getOrderBreakdown(o);
+      paymentSplit.cash += b.cash;
+      paymentSplit.mpesa += b.mpesa;
     });
 
     const itemMap = new Map<string, { quantity: number; revenue: number }>();
@@ -179,9 +199,11 @@ export const AdminDashboard: React.FC = () => {
     const unsettled = all.filter((o) => o.payment_status === 'active');
     const unsettledValue = unsettled.reduce((sum, o) => sum + o.total_amount, 0);
     const credit = all.filter((o) => o.payment_status === 'credit');
-    const creditValue = credit.reduce((sum, o) => sum + o.total_amount, 0);
+    // Only the outstanding portion — a split ticket's cash/mpesa portion was
+    // already collected up front and shouldn't inflate the credit total.
+    const creditValue = credit.reduce((sum, o) => sum + getOrderBreakdown(o).creditOutstanding, 0);
     const loss = all.filter((o) => o.payment_status === 'unpaid_loss');
-    const lossValue = loss.reduce((sum, o) => sum + o.total_amount, 0);
+    const lossValue = loss.reduce((sum, o) => sum + getOrderBreakdown(o).lossAmount, 0);
 
     // Expenses within the same window.
     const deductedInPeriod = (ledgers ?? []).filter(
@@ -587,14 +609,16 @@ export const AdminDashboard: React.FC = () => {
     .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
 
   const [ticketSearch, setTicketSearch] = useState('');
+  const [ticketDateFilter, setTicketDateFilter] = useState<DatePreset>('all');
   const searchedTickets = useMemo(() => {
+    const byDate = filterByDatePreset(openTickets, ticketDateFilter, (o) => o.timestamp);
     const q = ticketSearch.trim().toLowerCase();
-    if (!q) return openTickets;
-    return openTickets.filter((o) => {
+    if (!q) return byDate;
+    return byDate.filter((o) => {
       const waiterName = staffMap.get(o.placed_by_waiter_id)?.name?.toLowerCase() ?? '';
       return waiterName.includes(q) || o.order_id.toLowerCase().includes(q);
     });
-  }, [openTickets, ticketSearch, staffMap]);
+  }, [openTickets, ticketDateFilter, ticketSearch, staffMap]);
 
   const {
     page: ticketPage,
@@ -625,17 +649,22 @@ export const AdminDashboard: React.FC = () => {
   // ---------------------------------------------------------------------
   const creditOrders = (orders ?? [])
     .filter((o) => o.payment_status === 'credit')
-    .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+    // Oldest-first: the longest-outstanding tab is the highest collection
+    // priority, so it should surface first rather than get buried under
+    // whatever was opened most recently.
+    .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
 
   const [creditSearch, setCreditSearch] = useState('');
+  const [creditDateFilter, setCreditDateFilter] = useState<DatePreset>('all');
   const searchedCreditOrders = useMemo(() => {
+    const byDate = filterByDatePreset(creditOrders, creditDateFilter, (o) => o.timestamp);
     const q = creditSearch.trim().toLowerCase();
-    if (!q) return creditOrders;
-    return creditOrders.filter((o) => {
+    if (!q) return byDate;
+    return byDate.filter((o) => {
       const waiterName = staffMap.get(o.placed_by_waiter_id)?.name?.toLowerCase() ?? '';
       return waiterName.includes(q) || o.order_id.toLowerCase().includes(q);
     });
-  }, [creditOrders, creditSearch, staffMap]);
+  }, [creditOrders, creditDateFilter, creditSearch, staffMap]);
 
   const {
     page: creditPage,
@@ -644,10 +673,9 @@ export const AdminDashboard: React.FC = () => {
     pageItems: pagedCredit,
   } = usePagination(searchedCreditOrders, 4);
 
-  const handleCollectCredit = async (orderId: string, method: 'cash' | 'mpesa') => {
-    await db.orders.update(orderId, {
-      payment_status: 'paid',
-      payment_method: method,
+  const handleCollectCredit = async (order: Order, method: 'cash' | 'mpesa') => {
+    await db.orders.update(order.order_id, {
+      ...collectOutstandingCredit(order, method),
       synced: false,
     });
     requestSync();
@@ -1060,11 +1088,17 @@ export const AdminDashboard: React.FC = () => {
               <p className="text-zinc-600 text-[11px] font-mono text-center py-6">No unsettled tickets right now</p>
             ) : (
               <div>
-                <SearchInput
-                  value={ticketSearch}
-                  onChange={(v) => { setTicketSearch(v); setTicketPage(1); }}
-                  placeholder="Search by waiter or ticket..."
+                <DateFilter
+                  value={ticketDateFilter}
+                  onChange={(v) => { setTicketDateFilter(v); setTicketPage(1); }}
                 />
+                <div className="mt-2">
+                  <SearchInput
+                    value={ticketSearch}
+                    onChange={(v) => { setTicketSearch(v); setTicketPage(1); }}
+                    placeholder="Search by waiter or ticket..."
+                  />
+                </div>
                 {searchedTickets.length === 0 ? (
                   <p className="text-zinc-600 text-[11px] font-mono text-center py-4">No tickets match your search</p>
                 ) : (
@@ -1072,6 +1106,13 @@ export const AdminDashboard: React.FC = () => {
                     <div className="space-y-2.5 mt-2">
                       {pagedTickets.map((o) => {
                         const isExpanded = expandedOrderId === o.order_id;
+                        const severity = ticketSeverity(o.timestamp);
+                        const severityClass =
+                          severity === 'danger'
+                            ? 'bg-red-500/10 border-red-500/30 text-red-400'
+                            : severity === 'caution'
+                            ? 'bg-amber-500/10 border-amber-500/30 text-amber-400'
+                            : 'bg-zinc-800 border-zinc-700 text-zinc-400';
                         return (
                           <div
                             key={o.order_id}
@@ -1084,10 +1125,20 @@ export const AdminDashboard: React.FC = () => {
                                 </p>
                                 <p className="text-[10px] font-mono text-zinc-500">
                                   {staffMap.get(o.placed_by_waiter_id)?.name ?? 'Unknown waiter'} ·{' '}
+                                  {new Date(o.timestamp).toLocaleDateString([], { day: '2-digit', month: 'short' })}
+                                  {' '}
                                   {new Date(o.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                                 </p>
                               </div>
-                              <span className="text-orange-400 font-mono font-bold text-sm">{money(o.total_amount)}</span>
+                              <div className="text-right space-y-1">
+                                <span className="text-orange-400 font-mono font-bold text-sm block">{money(o.total_amount)}</span>
+                                <span
+                                  className={`inline-block text-[9px] font-mono font-bold px-1.5 py-0.5 rounded border ${severityClass}`}
+                                  title="How long this ticket has been open"
+                                >
+                                  Open {formatDuration(o.timestamp)}
+                                </span>
+                              </div>
                             </div>
 
                             <button
@@ -1148,11 +1199,17 @@ export const AdminDashboard: React.FC = () => {
               <p className="text-zinc-600 text-[11px] font-mono text-center py-6">No open credit bills</p>
             ) : (
               <div>
-                <SearchInput
-                  value={creditSearch}
-                  onChange={(v) => { setCreditSearch(v); setCreditPage(1); }}
-                  placeholder="Search by waiter or ticket..."
+                <DateFilter
+                  value={creditDateFilter}
+                  onChange={(v) => { setCreditDateFilter(v); setCreditPage(1); }}
                 />
+                <div className="mt-2">
+                  <SearchInput
+                    value={creditSearch}
+                    onChange={(v) => { setCreditSearch(v); setCreditPage(1); }}
+                    placeholder="Search by waiter or ticket..."
+                  />
+                </div>
                 {searchedCreditOrders.length === 0 ? (
                   <p className="text-zinc-600 text-[11px] font-mono text-center py-4">No tabs match your search</p>
                 ) : (
@@ -1160,10 +1217,16 @@ export const AdminDashboard: React.FC = () => {
                     <div className="space-y-2.5 mt-2">
                       {pagedCredit.map((o) => {
                         const isExpanded = expandedOrderId === o.order_id;
+                        const breakdown = getOrderBreakdown(o);
+                        const isPartialSplit = breakdown.cash > 0 || breakdown.mpesa > 0;
+                        const daysOld = ageInDays(o.timestamp);
+                        const isAged = daysOld >= 30;
                         return (
                           <div
                             key={o.order_id}
-                            className="bg-zinc-900/60 border border-zinc-800/60 rounded-xl p-3 space-y-2"
+                            className={`bg-zinc-900/60 border rounded-xl p-3 space-y-2 ${
+                              isAged ? 'border-red-500/30' : 'border-zinc-800/60'
+                            }`}
                           >
                             <div className="flex items-center justify-between">
                               <div>
@@ -1172,11 +1235,38 @@ export const AdminDashboard: React.FC = () => {
                                 </p>
                                 <p className="text-[10px] font-mono text-zinc-500">
                                   {staffMap.get(o.placed_by_waiter_id)?.name ?? 'Unknown waiter'} ·{' '}
-                                  {new Date(o.timestamp).toLocaleDateString([], { day: '2-digit', month: 'short' })}
+                                  {formatRelativeDate(o.timestamp)}
+                                  {' '}
+                                  <span className="text-zinc-600">
+                                    ({new Date(o.timestamp).toLocaleDateString([], { day: '2-digit', month: 'short' })})
+                                  </span>
                                 </p>
+                                {isAged && (
+                                  <p className="text-[9px] font-mono text-red-400 mt-0.5">
+                                    {daysOld} days outstanding — flagged
+                                  </p>
+                                )}
                               </div>
-                              <span className="text-orange-400 font-mono font-bold text-sm">{money(o.total_amount)}</span>
+                              <div className="text-right">
+                                <span className="text-orange-400 font-mono font-bold text-sm block">
+                                  {money(breakdown.creditOutstanding)} owed
+                                </span>
+                                {isPartialSplit && (
+                                  <span className="text-[9px] font-mono text-zinc-600">
+                                    of {money(o.total_amount)} bill
+                                  </span>
+                                )}
+                              </div>
                             </div>
+
+                            {isPartialSplit && (
+                              <p className="text-[9px] font-mono text-zinc-500 bg-zinc-950/60 border border-zinc-800/60 rounded-lg px-2 py-1">
+                                Already collected:
+                                {breakdown.cash > 0 && ` ${money(breakdown.cash)} cash`}
+                                {breakdown.cash > 0 && breakdown.mpesa > 0 && ' +'}
+                                {breakdown.mpesa > 0 && ` ${money(breakdown.mpesa)} m-pesa`}
+                              </p>
+                            )}
 
                             <button
                               onClick={() => setExpandedOrderId(isExpanded ? null : o.order_id)}
@@ -1204,13 +1294,13 @@ export const AdminDashboard: React.FC = () => {
 
                             <div className="grid grid-cols-3 gap-1.5">
                               <button
-                                onClick={() => handleCollectCredit(o.order_id, 'cash')}
+                                onClick={() => handleCollectCredit(o, 'cash')}
                                 className="py-1.5 bg-zinc-800 text-zinc-300 rounded-lg font-mono text-[9px] font-bold uppercase tracking-wider active:scale-95 transition"
                               >
                                 Paid Cash
                               </button>
                               <button
-                                onClick={() => handleCollectCredit(o.order_id, 'mpesa')}
+                                onClick={() => handleCollectCredit(o, 'mpesa')}
                                 className="py-1.5 bg-zinc-800 text-zinc-300 rounded-lg font-mono text-[9px] font-bold uppercase tracking-wider active:scale-95 transition"
                               >
                                 Paid M-Pesa

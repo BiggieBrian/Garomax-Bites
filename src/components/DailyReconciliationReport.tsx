@@ -4,6 +4,7 @@ import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import { db } from '../db/kibandaDB';
 import type { RecipeItem } from '../types';
+import { getOrderBreakdown } from '../lib/payments';
 import {
   AlertTriangle,
   ShieldAlert,
@@ -133,18 +134,21 @@ export const DailyReconciliationReport: React.FC<{ branchId: string | null }> = 
     ordersToday.forEach((o) => {
       const s = get(o.placed_by_waiter_id);
       s.ordersPlaced += 1;
-      if (o.payment_status === 'paid') {
-        s.paidRevenue += o.total_amount;
-        if (o.payment_method === 'cash') s.cash += o.total_amount;
-        if (o.payment_method === 'mpesa') s.mpesa += o.total_amount;
-      } else if (o.payment_status === 'credit') {
-        s.creditValue += o.total_amount;
+      const b = getOrderBreakdown(o);
+      // Cash/mpesa collected today count immediately, even on a ticket
+      // that's still partly outstanding as credit (a split payment) — the
+      // money is physically in the drawer/account regardless of the rest.
+      s.cash += b.cash;
+      s.mpesa += b.mpesa;
+      s.paidRevenue += b.cash + b.mpesa;
+      if (o.payment_status === 'credit') {
+        s.creditValue += b.creditOutstanding;
         s.creditCount += 1;
       } else if (o.payment_status === 'cancelled') {
         s.cancelledCount += 1;
         s.cancelledValue += o.total_amount;
       } else if (o.payment_status === 'unpaid_loss') {
-        s.unpaidLossValue += o.total_amount;
+        s.unpaidLossValue += b.lossAmount;
       }
       if (o.self_confirmed) {
         s.selfConfirmedCount += 1;
@@ -191,6 +195,7 @@ export const DailyReconciliationReport: React.FC<{ branchId: string | null }> = 
         .map((o) => ({
           ...o,
           daysOpen: Math.floor((Date.now() - new Date(o.timestamp).getTime()) / 86400000),
+          outstanding: getOrderBreakdown(o).creditOutstanding,
         }))
         .sort((a, b) => b.daysOpen - a.daysOpen),
     [allOrders, branchId]
@@ -299,14 +304,14 @@ export const DailyReconciliationReport: React.FC<{ branchId: string | null }> = 
     });
     lines.push('');
     lines.push('OPEN CREDIT (ALL TIME, NOT JUST THIS DAY)');
-    lines.push('Waiter,Placed,Days Open,Amount');
+    lines.push('Waiter,Placed,Days Open,Amount Owed');
     openCredit.forEach((o) => {
       lines.push(
         [
           staffMap.get(o.placed_by_waiter_id) ?? o.placed_by_waiter_id,
           new Date(o.timestamp).toLocaleDateString(),
           o.daysOpen,
-          o.total_amount,
+          o.outstanding,
         ].join(',')
       );
     });
@@ -422,14 +427,14 @@ export const DailyReconciliationReport: React.FC<{ branchId: string | null }> = 
     doc.text(`Open Credit — All Time (${openCredit.length})`, 14, cursorY);
     autoTable(doc, {
       startY: cursorY + 3,
-      head: [['Waiter', 'Placed', 'Days Open', 'Amount']],
+      head: [['Waiter', 'Placed', 'Days Open', 'Amount Owed']],
       body:
         openCredit.length > 0
           ? openCredit.map((o) => [
               staffMap.get(o.placed_by_waiter_id) ?? 'Unknown',
               new Date(o.timestamp).toLocaleDateString(),
               String(o.daysOpen),
-              money(o.total_amount),
+              money(o.outstanding),
             ])
           : [['—', '—', '—', 'No open credit balances']],
       styles: { fontSize: 8 },
@@ -622,7 +627,7 @@ export const DailyReconciliationReport: React.FC<{ branchId: string | null }> = 
                 <span>
                   {staffMap.get(o.placed_by_waiter_id) ?? 'Unknown'} · {o.daysOpen}d open
                 </span>
-                <span className="font-bold">{money(o.total_amount)}</span>
+                <span className="font-bold">{money(o.outstanding)}</span>
               </div>
             ))}
           </div>
